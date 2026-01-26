@@ -244,6 +244,20 @@ body {
     background-color: #6aa85c;
 }
 
+.trail-actions button.parent-btn {
+    background-color: #9c27b0;
+    color: white;
+}
+
+.trail-actions button.parent-btn:hover {
+    background-color: #7b1fa2;
+}
+
+.trail-actions button.parent-btn:disabled {
+    background-color: #ce93d8;
+    cursor: not-allowed;
+}
+
 /* Map Container */
 .map-container {
     flex: 1;

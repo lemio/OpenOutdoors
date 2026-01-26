@@ -14,12 +14,9 @@ class TrailsApp {
         this.init();
     }
 
-    init() {
+    async init() {
         // Initialize map
         this.initMap();
-
-        // Load shared trails from URL if present
-        this.loadSharedTrails();
 
         // Setup event listeners
         this.setupEventListeners();
@@ -32,6 +29,9 @@ class TrailsApp {
 
         // Update UI
         this.updateTrailsUI();
+
+        // Load shared trails from URL if present (async)
+        await this.loadSharedTrails();
 
         // Register service worker for PWA
         this.registerServiceWorker();
@@ -661,8 +661,76 @@ class TrailsApp {
             });
             trailActions.appendChild(osmBtn);
             
+            // Add button to load parent relations
+            const parentBtn = document.createElement('button');
+            parentBtn.className = 'parent-btn';
+            parentBtn.title = 'Load parent routes';
+            parentBtn.setAttribute('aria-label', 'Load parents');
+            const parentIcon = document.createElement('i');
+            parentIcon.className = 'fas fa-sitemap';
+            parentBtn.appendChild(parentIcon);
+            parentBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                parentBtn.disabled = true;
+                parentIcon.className = 'fas fa-spinner fa-spin';
+                await this.loadAndDisplayParents(trail.id);
+                parentIcon.className = 'fas fa-sitemap';
+                parentBtn.disabled = false;
+            });
+            trailActions.appendChild(parentBtn);
+            
             trailItem.appendChild(trailInfo);
             trailItem.appendChild(trailActions);
+            
+            // Display parent relations if loaded
+            if (trail.parentRelations && trail.parentRelations.length > 0) {
+                const parentsDiv = document.createElement('div');
+                parentsDiv.className = 'trail-parents';
+                parentsDiv.style.marginTop = '0.5rem';
+                parentsDiv.style.paddingLeft = '1rem';
+                parentsDiv.style.borderLeft = '2px solid #ddd';
+                parentsDiv.style.fontSize = '0.85rem';
+                parentsDiv.style.color = '#666';
+                
+                const parentsTitle = document.createElement('div');
+                parentsTitle.style.fontWeight = '600';
+                parentsTitle.style.marginBottom = '0.25rem';
+                parentsTitle.textContent = 'Part of:';
+                parentsDiv.appendChild(parentsTitle);
+                
+                trail.parentRelations.forEach(parent => {
+                    const parentLink = document.createElement('div');
+                    parentLink.style.marginBottom = '0.25rem';
+                    
+                    const parentName = document.createElement('span');
+                    parentName.textContent = parent.name;
+                    parentName.style.cursor = 'pointer';
+                    parentName.style.color = '#2c7a3f';
+                    parentName.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        // Check if parent is in allTrails
+                        const parentTrail = this.allTrails.find(t => t.id === parent.id);
+                        if (parentTrail) {
+                            this.toggleTrailHighlight(parent.id);
+                        } else {
+                            this.showToast(`Parent route not loaded: ${parent.name}`);
+                        }
+                    });
+                    
+                    if (parent.isSuperRoute) {
+                        const superIcon = document.createElement('i');
+                        superIcon.className = 'fas fa-layer-group';
+                        superIcon.style.marginRight = '0.3rem';
+                        parentLink.appendChild(superIcon);
+                    }
+                    
+                    parentLink.appendChild(parentName);
+                    parentsDiv.appendChild(parentLink);
+                });
+                
+                trailItem.appendChild(parentsDiv);
+            }
+            
             trailsContainer.appendChild(trailItem);
             
             // Add hover listeners
@@ -888,18 +956,14 @@ class TrailsApp {
             return;
         }
 
-        // Create a compressed representation of trails
-        const trailsData = this.savedTrails.map(trail => ({
-            i: trail.id,
-            n: trail.name,
-            d: trail.description,
-            c: trail.coordinates,
-            di: trail.distance,
-            ot: trail.osmType
-        }));
-
-        const encoded = encodeURIComponent(JSON.stringify(trailsData));
-        const shareUrl = `${window.location.origin}${window.location.pathname}?trails=${encoded}`;
+        // Get current map bounds
+        const bounds = this.map.getBounds();
+        const bbox = `${bounds.getSouth()},${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()}`;
+        
+        // Create a compressed representation using OSM refs only
+        const trailRefs = this.savedTrails.map(trail => trail.id).join(',');
+        
+        const shareUrl = `${window.location.origin}${window.location.pathname}?refs=${trailRefs}&bbox=${bbox}`;
 
         // Check URL length
         if (shareUrl.length > 2000) {
@@ -959,48 +1023,201 @@ class TrailsApp {
         }, 10000); // Show for 10 seconds
     }
 
-    loadSharedTrails() {
+    async loadSharedTrails() {
         const urlParams = new URLSearchParams(window.location.search);
-        const trailsParam = urlParams.get('trails');
+        const refsParam = urlParams.get('refs');
+        const bboxParam = urlParams.get('bbox');
+        const trailsParam = urlParams.get('trails'); // Keep backward compatibility
 
-        if (!trailsParam) {
+        // New format: OSM refs
+        if (refsParam) {
+            try {
+                this.showLoading(true);
+                const refs = refsParam.split(',').map(ref => ref.trim()).filter(ref => ref);
+                
+                // Set map bounds if provided
+                if (bboxParam) {
+                    const [south, west, north, east] = bboxParam.split(',').map(parseFloat);
+                    if (!isNaN(south) && !isNaN(west) && !isNaN(north) && !isNaN(east)) {
+                        this.map.fitBounds([[south, west], [north, east]]);
+                    }
+                }
+                
+                // Fetch trails from OSM
+                const trails = await this.fetchTrailsByRefs(refs);
+                
+                if (trails.length > 0) {
+                    // Merge with existing saved trails
+                    trails.forEach(trail => {
+                        if (!this.savedTrails.some(t => t.id === trail.id)) {
+                            this.savedTrails.push(trail);
+                        }
+                    });
+
+                    this.saveSavedTrails();
+                    this.allTrails = [...this.savedTrails];
+                    
+                    // Display shared trails on map
+                    this.displayTrailsOnMap(trails);
+                    this.updateTrailsUI();
+
+                    this.showToast(`Loaded ${trails.length} shared trails!`);
+                } else {
+                    this.showToast('No trails could be loaded from shared link');
+                }
+                
+                this.showLoading(false);
+                
+                // Clean URL
+                window.history.replaceState({}, document.title, window.location.pathname);
+            } catch (error) {
+                console.error('Error loading shared trails:', error);
+                this.showToast('Error loading shared trails');
+                this.showLoading(false);
+            }
             return;
         }
+        
+        // Old format: full trail data (backward compatibility)
+        if (trailsParam) {
+            try {
+                const trailsData = JSON.parse(decodeURIComponent(trailsParam));
+                const trails = trailsData.map(t => ({
+                    id: t.i,
+                    type: 'relation',
+                    osmType: t.ot || 'relation',
+                    name: t.n,
+                    description: t.d,
+                    coordinates: t.c,
+                    wayGroups: t.wg || [],
+                    distance: t.di,
+                    tags: {}
+                }));
 
+                // Merge with existing saved trails
+                trails.forEach(trail => {
+                    if (!this.savedTrails.some(t => t.id === trail.id)) {
+                        this.savedTrails.push(trail);
+                    }
+                });
+
+                this.saveSavedTrails();
+                this.allTrails = [...this.savedTrails];
+                
+                // Display shared trails on map
+                this.displayTrailsOnMap(trails);
+                this.updateTrailsUI();
+
+                this.showToast(`Loaded ${trails.length} shared trails!`);
+
+                // Clean URL
+                window.history.replaceState({}, document.title, window.location.pathname);
+            } catch (error) {
+                console.error('Error loading shared trails:', error);
+                this.showToast('Error loading shared trails');
+            }
+        }
+    }
+
+    async fetchTrailsByRefs(refs) {
         try {
-            const trailsData = JSON.parse(decodeURIComponent(trailsParam));
-            const trails = trailsData.map(t => ({
-                id: t.i,
-                type: 'relation',
-                osmType: t.ot || 'relation',
-                name: t.n,
-                description: t.d,
-                coordinates: t.c,
-                distance: t.di,
-                tags: {}
-            }));
+            // Build Overpass query to fetch specific relations by ID
+            const relationIds = refs.map(ref => `relation(${ref});`).join('\n                    ');
+            const overpassQuery = `
+                [out:json][timeout:25];
+                (
+                    ${relationIds}
+                );
+                out body;
+                >;
+                out skel qt;
+            `;
 
-            // Merge with existing saved trails
-            trails.forEach(trail => {
-                if (!this.savedTrails.some(t => t.id === trail.id)) {
-                    this.savedTrails.push(trail);
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+            const response = await fetch('https://overpass-api.de/api/interpreter', {
+                method: 'POST',
+                body: overpassQuery,
+                signal: controller.signal
+            });
+
+            clearTimeout(timeoutId);
+
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const data = await response.json();
+            
+            // Process the response similar to processSearchResults
+            const ways = {};
+            const nodes = {};
+            const trails = [];
+
+            // First pass: collect all nodes
+            data.elements.forEach(element => {
+                if (element.type === 'node') {
+                    nodes[element.id] = element;
                 }
             });
 
-            this.saveSavedTrails();
-            this.allTrails = [...this.savedTrails];
-            
-            // Display shared trails on map
-            this.displayTrailsOnMap(trails);
-            this.updateTrailsUI();
+            // Second pass: collect ways
+            data.elements.forEach(element => {
+                if (element.type === 'way' && element.nodes) {
+                    const coords = element.nodes
+                        .map(nodeId => nodes[nodeId])
+                        .filter(node => node && node.lat && node.lon)
+                        .map(node => [node.lat, node.lon]);
 
-            this.showToast(`Loaded ${trails.length} shared trails!`);
+                    if (coords.length > 0) {
+                        ways[element.id] = {
+                            id: element.id,
+                            type: 'way',
+                            tags: element.tags || {},
+                            coordinates: coords
+                        };
+                    }
+                }
+            });
 
-            // Clean URL
-            window.history.replaceState({}, document.title, window.location.pathname);
+            // Third pass: process relations
+            data.elements.forEach(element => {
+                if (element.type === 'relation') {
+                    const trail = {
+                        id: element.id,
+                        type: 'relation',
+                        osmType: 'relation',
+                        name: element.tags?.name || element.tags?.ref || `Trail ${element.id}`,
+                        description: this.getTrailDescription(element.tags),
+                        tags: element.tags || {},
+                        members: element.members || [],
+                        coordinates: [],
+                        wayGroups: [],
+                        distance: element.tags?.distance || null
+                    };
+
+                    // Collect coordinates from member ways - keep them separated by way
+                    if (element.members) {
+                        element.members.forEach(member => {
+                            if (member.type === 'way' && ways[member.ref]) {
+                                const wayCoords = ways[member.ref].coordinates;
+                                trail.wayGroups.push(wayCoords);
+                                trail.coordinates.push(...wayCoords);
+                            }
+                        });
+                    }
+
+                    if (trail.coordinates.length > 0) {
+                        trails.push(trail);
+                    }
+                }
+            });
+
+            return trails;
         } catch (error) {
-            console.error('Error loading shared trails:', error);
-            this.showToast('Error loading shared trails');
+            console.error('Error fetching trails by refs:', error);
+            throw error;
         }
     }
 
@@ -1015,6 +1232,114 @@ class TrailsApp {
                         console.log('ServiceWorker registration failed:', error);
                     });
             });
+        }
+    }
+
+    async fetchParentRelations(relationId) {
+        try {
+            const response = await fetch(`https://www.openstreetmap.org/api/0.6/relation/${relationId}/relations`);
+            
+            if (!response.ok) {
+                if (response.status === 404) {
+                    // No parent relations found
+                    return [];
+                }
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const xmlText = await response.text();
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
+            
+            const relations = xmlDoc.getElementsByTagName('relation');
+            const parents = [];
+            
+            for (let i = 0; i < relations.length; i++) {
+                const relation = relations[i];
+                const id = relation.getAttribute('id');
+                const tags = {};
+                
+                const tagElements = relation.getElementsByTagName('tag');
+                for (let j = 0; j < tagElements.length; j++) {
+                    const tag = tagElements[j];
+                    tags[tag.getAttribute('k')] = tag.getAttribute('v');
+                }
+                
+                // Only include if it's a route or superroute
+                if (tags.type === 'route' || tags.type === 'superroute') {
+                    parents.push({
+                        id: parseInt(id),
+                        tags: tags,
+                        name: tags.name || tags.ref || `Relation ${id}`,
+                        isSuperRoute: tags.type === 'superroute'
+                    });
+                }
+            }
+            
+            return parents;
+        } catch (error) {
+            console.error('Error fetching parent relations:', error);
+            return [];
+        }
+    }
+
+    async loadSuperRoutes(trailId, visited = new Set()) {
+        // Prevent recursive loops
+        if (visited.has(trailId)) {
+            return null;
+        }
+        visited.add(trailId);
+        
+        // Check if already loaded in allTrails
+        const existingTrail = this.allTrails.find(t => t.id === trailId);
+        if (existingTrail && existingTrail.parentRelations) {
+            return existingTrail;
+        }
+        
+        const parents = await this.fetchParentRelations(trailId);
+        
+        if (parents.length === 0) {
+            return null;
+        }
+        
+        // Store parent info on the trail
+        const trail = this.allTrails.find(t => t.id === trailId);
+        if (trail) {
+            trail.parentRelations = parents;
+            
+            // Recursively load parent relations
+            for (const parent of parents) {
+                if (!visited.has(parent.id)) {
+                    // Check if parent is already in our trails
+                    const parentInTrails = this.allTrails.find(t => t.id === parent.id);
+                    if (!parentInTrails) {
+                        // Fetch this parent trail too
+                        const parentTrails = await this.fetchTrailsByRefs([parent.id.toString()]);
+                        if (parentTrails.length > 0) {
+                            const parentTrail = parentTrails[0];
+                            this.allTrails.push(parentTrail);
+                            // Recursively load its parents
+                            await this.loadSuperRoutes(parent.id, visited);
+                        }
+                    } else {
+                        // Load its parents recursively
+                        await this.loadSuperRoutes(parent.id, visited);
+                    }
+                }
+            }
+        }
+        
+        return trail;
+    }
+
+    async loadAndDisplayParents(trailId) {
+        try {
+            await this.loadSuperRoutes(trailId);
+            this.updateTrailsUI();
+            this.showToast('Parent routes loaded!');
+        } catch (error) {
+            console.error('Error loading parent routes:', error);
+            this.showToast('Error loading parent routes');
         }
     }
 }
