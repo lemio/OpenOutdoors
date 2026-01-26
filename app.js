@@ -86,7 +86,15 @@ class TrailsApp {
     toggleCollapse() {
         const controlPanel = document.querySelector('.control-panel');
         const collapseBtn = document.getElementById('collapseBtn');
+        
+        if (!controlPanel || !collapseBtn) {
+            return;
+        }
+        
         const icon = collapseBtn.querySelector('i');
+        if (!icon) {
+            return;
+        }
         
         controlPanel.classList.toggle('collapsed');
         
