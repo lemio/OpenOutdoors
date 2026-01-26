@@ -686,7 +686,8 @@ class TrailsApp {
             trailDetails.appendChild(distanceSpan);
             trailDetails.appendChild(document.createTextNode(' • '));
         }
-        trailDetails.appendChild(document.createTextNode(`${parent.childRelations.length} routes • ${parent.description}`));
+        const description = parent.description || 'Route';
+        trailDetails.appendChild(document.createTextNode(`${parent.childRelations.length} routes • ${description}`));
         
         trailInfo.appendChild(trailName);
         trailInfo.appendChild(trailDetails);
@@ -758,7 +759,7 @@ class TrailsApp {
         // Toggle collapse/expand
         expandIcon.addEventListener('click', (e) => {
             e.stopPropagation();
-            if (childrenContainer.style.display === 'none') {
+            if (childrenContainer.style.display === 'none' || childrenContainer.style.display === '') {
                 childrenContainer.style.display = 'block';
                 expandIcon.className = 'fas fa-chevron-down';
             } else {
@@ -1372,10 +1373,16 @@ class TrailsApp {
         }
     }
 
-    async fetchParentRelations(relationId) {
+    async fetchParentRelations(relationId, skipDelay = false) {
         try {
-            // Add 200ms delay to avoid overloading OSM API
-            await new Promise(resolve => setTimeout(resolve, 200));
+            // Add 200ms delay to avoid overloading OSM API (unless skipDelay is true)
+            if (!skipDelay && this.lastApiCallTime) {
+                const timeSinceLastCall = Date.now() - this.lastApiCallTime;
+                if (timeSinceLastCall < 200) {
+                    await new Promise(resolve => setTimeout(resolve, 200 - timeSinceLastCall));
+                }
+            }
+            this.lastApiCallTime = Date.now();
             
             const response = await fetch(`https://www.openstreetmap.org/api/0.6/relation/${relationId}/relations`);
             
@@ -1431,24 +1438,37 @@ class TrailsApp {
             const processed = new Set();
             const parentMap = new Map(); // Map of parent ID to children
             
-            // Fetch parent relations for all trails with rate limiting
-            for (const trail of trails) {
-                if (processed.has(trail.id)) continue;
-                
-                const parents = await this.fetchParentRelations(trail.id);
-                
-                if (parents.length > 0) {
-                    trail.parentRelations = parents;
-                    processed.add(trail.id);
+            // Process trails in batches with rate limiting
+            // Process up to 3 at a time to speed things up while respecting rate limit
+            const batchSize = 3;
+            for (let i = 0; i < trails.length; i += batchSize) {
+                const batch = trails.slice(i, i + batchSize);
+                const promises = batch.map(async (trail) => {
+                    if (processed.has(trail.id)) return null;
                     
-                    // Group by parent
-                    for (const parent of parents) {
-                        if (!parentMap.has(parent.id)) {
-                            parentMap.set(parent.id, []);
-                        }
-                        parentMap.get(parent.id).push(trail);
+                    const parents = await this.fetchParentRelations(trail.id);
+                    
+                    if (parents.length > 0) {
+                        trail.parentRelations = parents;
+                        processed.add(trail.id);
+                        return { trail, parents };
                     }
-                }
+                    return null;
+                });
+                
+                const results = await Promise.all(promises);
+                
+                // Group by parent
+                results.forEach(result => {
+                    if (result) {
+                        result.parents.forEach(parent => {
+                            if (!parentMap.has(parent.id)) {
+                                parentMap.set(parent.id, []);
+                            }
+                            parentMap.get(parent.id).push(result.trail);
+                        });
+                    }
+                });
             }
             
             // Fetch parent route data if not already loaded
