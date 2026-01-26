@@ -258,6 +258,25 @@ body {
     cursor: not-allowed;
 }
 
+/* Parent trail styling */
+.parent-trail-container {
+    margin-bottom: 0.5rem;
+}
+
+.parent-trail {
+    background-color: #f8f9fa;
+    font-weight: 500;
+}
+
+.child-trail {
+    background-color: #ffffff;
+    margin-bottom: 0.25rem;
+}
+
+.children-container {
+    margin-top: 0.5rem;
+}
+
 /* Map Container */
 .map-container {
     flex: 1;

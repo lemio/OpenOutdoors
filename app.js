@@ -324,7 +324,8 @@ class TrailsApp {
                     members: element.members || [],
                     coordinates: [],
                     wayGroups: [], // Array of coordinate arrays, one per way
-                    distance: element.tags?.distance || null
+                    distance: element.tags?.distance || null,
+                    isSuperRoute: element.tags?.type === 'superroute'
                 };
 
                 // Collect coordinates from member ways - keep them separated by way
@@ -360,6 +361,11 @@ class TrailsApp {
             this.showToast('No trails found. Try adjusting the search area or radius.');
         } else {
             this.showToast(`Found ${newTrails.length} new trails!`);
+        }
+        
+        // Automatically fetch and organize parent relations for new trails
+        if (newTrails.length > 0) {
+            this.organizeTrailHierarchy(newTrails);
         }
     }
 
@@ -583,175 +589,298 @@ class TrailsApp {
         // Clear existing content
         trailsContainer.innerHTML = '';
 
+        // Separate trails into those with parents (children) and standalone trails
+        const childTrails = new Set();
+        const parentTrails = [];
+        
+        this.allTrails.forEach(trail => {
+            if (trail.childRelations && trail.childRelations.length > 0) {
+                parentTrails.push(trail);
+                trail.childRelations.forEach(child => childTrails.add(child.id));
+            }
+        });
+        
+        const standaloneTrails = this.allTrails.filter(t => 
+            !childTrails.has(t.id) && (!t.childRelations || t.childRelations.length === 0)
+        );
+
         // Sort: saved trails first, then alphabetically by name
-        const sortedTrails = [...this.allTrails].sort((a, b) => {
+        const sortTrails = (trails) => trails.sort((a, b) => {
             const aIsSaved = this.savedTrails.some(t => t.id === a.id);
             const bIsSaved = this.savedTrails.some(t => t.id === b.id);
             if (aIsSaved && !bIsSaved) return -1;
             if (!aIsSaved && bIsSaved) return 1;
-            // Alphabetical sort by name
             return a.name.localeCompare(b.name);
         });
 
-        sortedTrails.forEach(trail => {
-            const isSaved = this.savedTrails.some(t => t.id === trail.id);
-            
-            // Create trail item
-            const trailItem = document.createElement('div');
-            trailItem.className = 'trail-item';
-            trailItem.setAttribute('data-trail-id', trail.id);
-            
-            // Trail info section
-            const trailInfo = document.createElement('div');
-            trailInfo.className = 'trail-info';
-            
-            const trailName = document.createElement('div');
-            trailName.className = 'trail-name';
-            trailName.textContent = trail.name;
-            if (isSaved) {
-                const bookmarkIcon = document.createElement('i');
-                bookmarkIcon.className = 'fas fa-bookmark';
-                bookmarkIcon.style.fontSize = '0.8em';
-                trailName.appendChild(document.createTextNode(' '));
-                trailName.appendChild(bookmarkIcon);
-            }
-            
-            const trailDetails = document.createElement('div');
-            trailDetails.className = 'trail-details';
-            if (trail.distance) {
-                const distanceSpan = document.createElement('span');
-                distanceSpan.className = 'trail-distance';
-                distanceSpan.textContent = `${trail.distance} km`;
-                trailDetails.appendChild(distanceSpan);
-                trailDetails.appendChild(document.createTextNode(' • '));
-            }
-            trailDetails.appendChild(document.createTextNode(trail.description));
-            
-            trailInfo.appendChild(trailName);
-            trailInfo.appendChild(trailDetails);
-            trailInfo.addEventListener('click', () => this.toggleTrailHighlight(trail.id));
-            
-            // Trail actions section
-            const trailActions = document.createElement('div');
-            trailActions.className = 'trail-actions';
-            
-            if (!isSaved) {
-                const saveBtn = document.createElement('button');
-                saveBtn.className = 'save-btn';
-                saveBtn.title = 'Save trail';
-                saveBtn.setAttribute('aria-label', 'Save trail');
-                const saveIcon = document.createElement('i');
-                saveIcon.className = 'fas fa-bookmark';
-                saveBtn.appendChild(saveIcon);
-                saveBtn.addEventListener('click', () => this.saveTrail(trail.id));
-                trailActions.appendChild(saveBtn);
-            } else {
-                const removeBtn = document.createElement('button');
-                removeBtn.className = 'remove-btn';
-                removeBtn.title = 'Remove trail';
-                removeBtn.setAttribute('aria-label', 'Remove trail');
-                const removeIcon = document.createElement('i');
-                removeIcon.className = 'fas fa-trash';
-                removeBtn.appendChild(removeIcon);
-                removeBtn.addEventListener('click', () => this.removeTrail(trail.id));
-                trailActions.appendChild(removeBtn);
-            }
-            
-            const osmBtn = document.createElement('button');
-            osmBtn.className = 'osm-btn';
-            osmBtn.title = 'View on OpenStreetMap';
-            osmBtn.setAttribute('aria-label', 'View on OSM');
-            const osmIcon = document.createElement('i');
-            osmIcon.className = 'fas fa-map';
-            osmBtn.appendChild(osmIcon);
-            osmBtn.addEventListener('click', () => {
-                window.open(`https://www.openstreetmap.org/${trail.osmType || 'relation'}/${trail.id}`, '_blank');
-            });
-            trailActions.appendChild(osmBtn);
-            
-            // Add button to load parent relations
-            const parentBtn = document.createElement('button');
-            parentBtn.className = 'parent-btn';
-            parentBtn.title = 'Load parent routes';
-            parentBtn.setAttribute('aria-label', 'Load parents');
-            const parentIcon = document.createElement('i');
-            parentIcon.className = 'fas fa-sitemap';
-            parentBtn.appendChild(parentIcon);
-            parentBtn.addEventListener('click', async (e) => {
+        const sortedParents = sortTrails([...parentTrails]);
+        const sortedStandalone = sortTrails([...standaloneTrails]);
+
+        // Display parent routes with their children
+        sortedParents.forEach(parent => {
+            this.createParentTrailElement(parent, trailsContainer);
+        });
+
+        // Display standalone trails
+        sortedStandalone.forEach(trail => {
+            this.createTrailElement(trail, trailsContainer, false);
+        });
+    }
+
+    createParentTrailElement(parent, container) {
+        const isSaved = this.savedTrails.some(t => t.id === parent.id);
+        
+        // Parent container
+        const parentContainer = document.createElement('div');
+        parentContainer.className = 'parent-trail-container';
+        parentContainer.style.marginBottom = '0.5rem';
+        
+        // Parent trail item
+        const parentItem = document.createElement('div');
+        parentItem.className = 'trail-item parent-trail';
+        parentItem.setAttribute('data-trail-id', parent.id);
+        if (parent.isSuperRoute) {
+            parentItem.style.backgroundColor = '#f0f8ff';
+        }
+        
+        // Trail info section
+        const trailInfo = document.createElement('div');
+        trailInfo.className = 'trail-info';
+        
+        const trailName = document.createElement('div');
+        trailName.className = 'trail-name';
+        
+        // Add collapse/expand icon
+        const expandIcon = document.createElement('i');
+        expandIcon.className = 'fas fa-chevron-down';
+        expandIcon.style.marginRight = '0.5rem';
+        expandIcon.style.cursor = 'pointer';
+        trailName.appendChild(expandIcon);
+        
+        const nameText = document.createTextNode(parent.name);
+        trailName.appendChild(nameText);
+        
+        if (isSaved) {
+            const bookmarkIcon = document.createElement('i');
+            bookmarkIcon.className = 'fas fa-bookmark';
+            bookmarkIcon.style.fontSize = '0.8em';
+            bookmarkIcon.style.marginLeft = '0.3rem';
+            trailName.appendChild(bookmarkIcon);
+        }
+        
+        if (parent.isSuperRoute) {
+            const superIcon = document.createElement('i');
+            superIcon.className = 'fas fa-layer-group';
+            superIcon.style.fontSize = '0.8em';
+            superIcon.style.marginLeft = '0.3rem';
+            superIcon.style.color = '#9c27b0';
+            trailName.appendChild(superIcon);
+        }
+        
+        const trailDetails = document.createElement('div');
+        trailDetails.className = 'trail-details';
+        if (parent.distance) {
+            const distanceSpan = document.createElement('span');
+            distanceSpan.className = 'trail-distance';
+            distanceSpan.textContent = `${parent.distance} km`;
+            trailDetails.appendChild(distanceSpan);
+            trailDetails.appendChild(document.createTextNode(' • '));
+        }
+        trailDetails.appendChild(document.createTextNode(`${parent.childRelations.length} routes • ${parent.description}`));
+        
+        trailInfo.appendChild(trailName);
+        trailInfo.appendChild(trailDetails);
+        trailInfo.addEventListener('click', () => this.toggleTrailHighlight(parent.id));
+        
+        // Trail actions section
+        const trailActions = document.createElement('div');
+        trailActions.className = 'trail-actions';
+        
+        if (!isSaved) {
+            const saveBtn = document.createElement('button');
+            saveBtn.className = 'save-btn';
+            saveBtn.title = 'Save parent and all children';
+            saveBtn.setAttribute('aria-label', 'Save parent route');
+            const saveIcon = document.createElement('i');
+            saveIcon.className = 'fas fa-bookmark';
+            saveBtn.appendChild(saveIcon);
+            saveBtn.appendChild(document.createTextNode(' All'));
+            saveBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                parentBtn.disabled = true;
-                parentIcon.className = 'fas fa-spinner fa-spin';
-                await this.loadAndDisplayParents(trail.id);
-                parentIcon.className = 'fas fa-sitemap';
-                parentBtn.disabled = false;
+                this.saveParentRoute(parent.id);
             });
-            trailActions.appendChild(parentBtn);
-            
-            trailItem.appendChild(trailInfo);
-            trailItem.appendChild(trailActions);
-            
-            // Display parent relations if loaded
-            if (trail.parentRelations && trail.parentRelations.length > 0) {
-                const parentsDiv = document.createElement('div');
-                parentsDiv.className = 'trail-parents';
-                parentsDiv.style.marginTop = '0.5rem';
-                parentsDiv.style.paddingLeft = '1rem';
-                parentsDiv.style.borderLeft = '2px solid #ddd';
-                parentsDiv.style.fontSize = '0.85rem';
-                parentsDiv.style.color = '#666';
-                
-                const parentsTitle = document.createElement('div');
-                parentsTitle.style.fontWeight = '600';
-                parentsTitle.style.marginBottom = '0.25rem';
-                parentsTitle.textContent = 'Part of:';
-                parentsDiv.appendChild(parentsTitle);
-                
-                trail.parentRelations.forEach(parent => {
-                    const parentLink = document.createElement('div');
-                    parentLink.style.marginBottom = '0.25rem';
-                    
-                    const parentName = document.createElement('span');
-                    parentName.textContent = parent.name;
-                    parentName.style.cursor = 'pointer';
-                    parentName.style.color = '#2c7a3f';
-                    parentName.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        // Check if parent is in allTrails
-                        const parentTrail = this.allTrails.find(t => t.id === parent.id);
-                        if (parentTrail) {
-                            this.toggleTrailHighlight(parent.id);
-                        } else {
-                            this.showToast(`Parent route not loaded: ${parent.name}`);
-                        }
-                    });
-                    
-                    if (parent.isSuperRoute) {
-                        const superIcon = document.createElement('i');
-                        superIcon.className = 'fas fa-layer-group';
-                        superIcon.style.marginRight = '0.3rem';
-                        parentLink.appendChild(superIcon);
-                    }
-                    
-                    parentLink.appendChild(parentName);
-                    parentsDiv.appendChild(parentLink);
-                });
-                
-                trailItem.appendChild(parentsDiv);
+            trailActions.appendChild(saveBtn);
+        } else {
+            const removeBtn = document.createElement('button');
+            removeBtn.className = 'remove-btn';
+            removeBtn.title = 'Remove parent route';
+            removeBtn.setAttribute('aria-label', 'Remove parent');
+            const removeIcon = document.createElement('i');
+            removeIcon.className = 'fas fa-trash';
+            removeBtn.appendChild(removeIcon);
+            removeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.removeTrail(parent.id);
+            });
+            trailActions.appendChild(removeBtn);
+        }
+        
+        const osmBtn = document.createElement('button');
+        osmBtn.className = 'osm-btn';
+        osmBtn.title = 'View on OpenStreetMap';
+        osmBtn.setAttribute('aria-label', 'View on OSM');
+        const osmIcon = document.createElement('i');
+        osmIcon.className = 'fas fa-map';
+        osmBtn.appendChild(osmIcon);
+        osmBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            window.open(`https://www.openstreetmap.org/${parent.osmType || 'relation'}/${parent.id}`, '_blank');
+        });
+        trailActions.appendChild(osmBtn);
+        
+        parentItem.appendChild(trailInfo);
+        parentItem.appendChild(trailActions);
+        parentContainer.appendChild(parentItem);
+        
+        // Children container (collapsible)
+        const childrenContainer = document.createElement('div');
+        childrenContainer.className = 'children-container';
+        childrenContainer.style.marginLeft = '1.5rem';
+        childrenContainer.style.borderLeft = '2px solid #9c27b0';
+        childrenContainer.style.paddingLeft = '0.5rem';
+        
+        parent.childRelations.forEach(child => {
+            this.createTrailElement(child, childrenContainer, true);
+        });
+        
+        parentContainer.appendChild(childrenContainer);
+        
+        // Toggle collapse/expand
+        expandIcon.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (childrenContainer.style.display === 'none') {
+                childrenContainer.style.display = 'block';
+                expandIcon.className = 'fas fa-chevron-down';
+            } else {
+                childrenContainer.style.display = 'none';
+                expandIcon.className = 'fas fa-chevron-right';
             }
-            
-            trailsContainer.appendChild(trailItem);
-            
-            // Add hover listeners
-            trailItem.addEventListener('mouseenter', () => {
-                this.highlightTrail(trail.id, true);
+        });
+        
+        // Add hover listeners to parent
+        parentItem.addEventListener('mouseenter', () => {
+            this.highlightTrail(parent.id, true);
+        });
+        parentItem.addEventListener('mouseleave', () => {
+            this.highlightTrail(parent.id, false);
+        });
+        parentItem.addEventListener('touchstart', () => {
+            this.highlightTrail(parent.id, true);
+        });
+        
+        container.appendChild(parentContainer);
+    }
+
+    createTrailElement(trail, container, isChild = false) {
+        const isSaved = this.savedTrails.some(t => t.id === trail.id);
+        
+        // Create trail item
+        const trailItem = document.createElement('div');
+        trailItem.className = 'trail-item';
+        if (isChild) {
+            trailItem.className += ' child-trail';
+        }
+        trailItem.setAttribute('data-trail-id', trail.id);
+        
+        // Trail info section
+        const trailInfo = document.createElement('div');
+        trailInfo.className = 'trail-info';
+        
+        const trailName = document.createElement('div');
+        trailName.className = 'trail-name';
+        trailName.textContent = trail.name;
+        if (isSaved) {
+            const bookmarkIcon = document.createElement('i');
+            bookmarkIcon.className = 'fas fa-bookmark';
+            bookmarkIcon.style.fontSize = '0.8em';
+            trailName.appendChild(document.createTextNode(' '));
+            trailName.appendChild(bookmarkIcon);
+        }
+        
+        const trailDetails = document.createElement('div');
+        trailDetails.className = 'trail-details';
+        if (trail.distance) {
+            const distanceSpan = document.createElement('span');
+            distanceSpan.className = 'trail-distance';
+            distanceSpan.textContent = `${trail.distance} km`;
+            trailDetails.appendChild(distanceSpan);
+            trailDetails.appendChild(document.createTextNode(' • '));
+        }
+        trailDetails.appendChild(document.createTextNode(trail.description));
+        
+        trailInfo.appendChild(trailName);
+        trailInfo.appendChild(trailDetails);
+        trailInfo.addEventListener('click', () => this.toggleTrailHighlight(trail.id));
+        
+        // Trail actions section
+        const trailActions = document.createElement('div');
+        trailActions.className = 'trail-actions';
+        
+        if (!isSaved) {
+            const saveBtn = document.createElement('button');
+            saveBtn.className = 'save-btn';
+            saveBtn.title = 'Save trail';
+            saveBtn.setAttribute('aria-label', 'Save trail');
+            const saveIcon = document.createElement('i');
+            saveIcon.className = 'fas fa-bookmark';
+            saveBtn.appendChild(saveIcon);
+            saveBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.saveTrail(trail.id);
             });
-            trailItem.addEventListener('mouseleave', () => {
-                this.highlightTrail(trail.id, false);
+            trailActions.appendChild(saveBtn);
+        } else {
+            const removeBtn = document.createElement('button');
+            removeBtn.className = 'remove-btn';
+            removeBtn.title = 'Remove trail';
+            removeBtn.setAttribute('aria-label', 'Remove trail');
+            const removeIcon = document.createElement('i');
+            removeIcon.className = 'fas fa-trash';
+            removeBtn.appendChild(removeIcon);
+            removeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.removeTrail(trail.id);
             });
-            // Touch support
-            trailItem.addEventListener('touchstart', () => {
-                this.highlightTrail(trail.id, true);
-            });
+            trailActions.appendChild(removeBtn);
+        }
+        
+        const osmBtn = document.createElement('button');
+        osmBtn.className = 'osm-btn';
+        osmBtn.title = 'View on OpenStreetMap';
+        osmBtn.setAttribute('aria-label', 'View on OSM');
+        const osmIcon = document.createElement('i');
+        osmIcon.className = 'fas fa-map';
+        osmBtn.appendChild(osmIcon);
+        osmBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            window.open(`https://www.openstreetmap.org/${trail.osmType || 'relation'}/${trail.id}`, '_blank');
+        });
+        trailActions.appendChild(osmBtn);
+        
+        trailItem.appendChild(trailInfo);
+        trailItem.appendChild(trailActions);
+        container.appendChild(trailItem);
+        
+        // Add hover listeners
+        trailItem.addEventListener('mouseenter', () => {
+            this.highlightTrail(trail.id, true);
+        });
+        trailItem.addEventListener('mouseleave', () => {
+            this.highlightTrail(trail.id, false);
+        });
+        // Touch support
+        trailItem.addEventListener('touchstart', () => {
+            this.highlightTrail(trail.id, true);
         });
     }
 
@@ -1245,6 +1374,9 @@ class TrailsApp {
 
     async fetchParentRelations(relationId) {
         try {
+            // Add 200ms delay to avoid overloading OSM API
+            await new Promise(resolve => setTimeout(resolve, 200));
+            
             const response = await fetch(`https://www.openstreetmap.org/api/0.6/relation/${relationId}/relations`);
             
             if (!response.ok) {
@@ -1291,64 +1423,86 @@ class TrailsApp {
         }
     }
 
-    async loadSuperRoutes(trailId, visited = new Set()) {
-        // Prevent recursive loops
-        if (visited.has(trailId)) {
-            return null;
-        }
-        visited.add(trailId);
-        
-        // Check if already loaded in allTrails
-        const existingTrail = this.allTrails.find(t => t.id === trailId);
-        if (existingTrail && existingTrail.parentRelations) {
-            return existingTrail;
-        }
-        
-        const parents = await this.fetchParentRelations(trailId);
-        
-        if (parents.length === 0) {
-            return null;
-        }
-        
-        // Store parent info on the trail
-        const trail = this.allTrails.find(t => t.id === trailId);
-        if (trail) {
-            trail.parentRelations = parents;
+    async organizeTrailHierarchy(trails) {
+        try {
+            this.showLoading(true);
             
-            // Recursively load parent relations
-            for (const parent of parents) {
-                if (!visited.has(parent.id)) {
-                    // Check if parent is already in our trails
-                    const parentInTrails = this.allTrails.find(t => t.id === parent.id);
-                    if (!parentInTrails) {
-                        // Fetch this parent trail too
-                        const parentTrails = await this.fetchTrailsByRefs([parent.id.toString()]);
-                        if (parentTrails.length > 0) {
-                            const parentTrail = parentTrails[0];
-                            this.allTrails.push(parentTrail);
-                            // Recursively load its parents
-                            await this.loadSuperRoutes(parent.id, visited);
+            // Track which trails have been processed to avoid loops
+            const processed = new Set();
+            const parentMap = new Map(); // Map of parent ID to children
+            
+            // Fetch parent relations for all trails with rate limiting
+            for (const trail of trails) {
+                if (processed.has(trail.id)) continue;
+                
+                const parents = await this.fetchParentRelations(trail.id);
+                
+                if (parents.length > 0) {
+                    trail.parentRelations = parents;
+                    processed.add(trail.id);
+                    
+                    // Group by parent
+                    for (const parent of parents) {
+                        if (!parentMap.has(parent.id)) {
+                            parentMap.set(parent.id, []);
                         }
-                    } else {
-                        // Load its parents recursively
-                        await this.loadSuperRoutes(parent.id, visited);
+                        parentMap.get(parent.id).push(trail);
                     }
                 }
             }
+            
+            // Fetch parent route data if not already loaded
+            for (const [parentId, children] of parentMap.entries()) {
+                const existingParent = this.allTrails.find(t => t.id === parentId);
+                
+                if (!existingParent) {
+                    // Fetch the parent route
+                    const parentTrails = await this.fetchTrailsByRefs([parentId.toString()]);
+                    if (parentTrails.length > 0) {
+                        const parentTrail = parentTrails[0];
+                        parentTrail.childRelations = children;
+                        this.allTrails.push(parentTrail);
+                    }
+                } else {
+                    // Update existing parent with children
+                    existingParent.childRelations = children;
+                }
+            }
+            
+            this.showLoading(false);
+            this.updateTrailsUI();
+        } catch (error) {
+            console.error('Error organizing trail hierarchy:', error);
+            this.showLoading(false);
         }
-        
-        return trail;
     }
 
-    async loadAndDisplayParents(trailId) {
-        try {
-            await this.loadSuperRoutes(trailId);
-            this.updateTrailsUI();
-            this.showToast('Parent routes loaded!');
-        } catch (error) {
-            console.error('Error loading parent routes:', error);
-            this.showToast('Error loading parent routes');
+    saveParentRoute(parentId) {
+        const parent = this.allTrails.find(t => t.id === parentId);
+        
+        if (!parent) {
+            return;
         }
+        
+        // Save the parent
+        if (!this.savedTrails.some(t => t.id === parent.id)) {
+            this.savedTrails.push(parent);
+        }
+        
+        // Save all children
+        if (parent.childRelations) {
+            parent.childRelations.forEach(child => {
+                if (!this.savedTrails.some(t => t.id === child.id)) {
+                    this.savedTrails.push(child);
+                }
+            });
+        }
+        
+        this.saveSavedTrails();
+        this.updateTrailsUI();
+        
+        const childCount = parent.childRelations ? parent.childRelations.length : 0;
+        this.showToast(`Saved ${parent.name} with ${childCount} child routes`);
     }
 }
 
