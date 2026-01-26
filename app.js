@@ -365,22 +365,53 @@ class TrailsApp {
                     trailId: trail.id
                 }).addTo(this.map);
 
-                polyline.bindPopup(`
-                    <div style="min-width: 200px;">
-                        <strong>${trail.name}</strong><br>
-                        ${trail.distance ? `<span style="color: #2c7a3f; font-weight: 600;">${trail.distance} km</span><br>` : ''}
-                        <small>${trail.description}</small><br>
-                        <div style="margin-top: 8px; display: flex; gap: 4px;">
-                            ${!isSaved ? `<button onclick="app.saveTrail(${trail.id})" style="padding: 4px 12px; background: #2c7a3f; color: white; border: none; border-radius: 4px; cursor: pointer;">
-                                <i class="fas fa-bookmark"></i> Save
-                            </button>` : ''}
-                            <a href="https://www.openstreetmap.org/${trail.osmType || 'relation'}/${trail.id}" target="_blank" rel="noopener" 
-                               style="padding: 4px 12px; background: #7ebc6f; color: white; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block;">
-                                <i class="fas fa-map"></i> OSM
-                            </a>
-                        </div>
-                    </div>
-                `);
+                // Create popup content safely
+                const popupDiv = document.createElement('div');
+                popupDiv.style.minWidth = '200px';
+                
+                const nameElement = document.createElement('strong');
+                nameElement.textContent = trail.name;
+                popupDiv.appendChild(nameElement);
+                popupDiv.appendChild(document.createElement('br'));
+                
+                if (trail.distance) {
+                    const distanceSpan = document.createElement('span');
+                    distanceSpan.style.color = '#2c7a3f';
+                    distanceSpan.style.fontWeight = '600';
+                    distanceSpan.textContent = `${trail.distance} km`;
+                    popupDiv.appendChild(distanceSpan);
+                    popupDiv.appendChild(document.createElement('br'));
+                }
+                
+                const descElement = document.createElement('small');
+                descElement.textContent = trail.description;
+                popupDiv.appendChild(descElement);
+                popupDiv.appendChild(document.createElement('br'));
+                
+                const buttonContainer = document.createElement('div');
+                buttonContainer.style.marginTop = '8px';
+                buttonContainer.style.display = 'flex';
+                buttonContainer.style.gap = '4px';
+                
+                if (!isSaved) {
+                    const saveBtn = document.createElement('button');
+                    saveBtn.className = 'popup-btn popup-btn-save';
+                    saveBtn.innerHTML = '<i class="fas fa-bookmark"></i> Save';
+                    saveBtn.addEventListener('click', () => this.saveTrail(trail.id));
+                    buttonContainer.appendChild(saveBtn);
+                }
+                
+                const osmLink = document.createElement('a');
+                osmLink.className = 'popup-btn popup-btn-osm';
+                osmLink.href = `https://www.openstreetmap.org/${trail.osmType || 'relation'}/${trail.id}`;
+                osmLink.target = '_blank';
+                osmLink.rel = 'noopener';
+                osmLink.innerHTML = '<i class="fas fa-map"></i> OSM';
+                buttonContainer.appendChild(osmLink);
+                
+                popupDiv.appendChild(buttonContainer);
+                
+                polyline.bindPopup(popupDiv);
 
                 // Add hover effect for map polyline
                 polyline.on('mouseover', () => {
@@ -449,6 +480,9 @@ class TrailsApp {
             return;
         }
 
+        // Clear existing content
+        trailsContainer.innerHTML = '';
+
         // Sort: saved trails first
         const sortedTrails = [...this.allTrails].sort((a, b) => {
             const aIsSaved = this.savedTrails.some(t => t.id === a.id);
@@ -458,49 +492,91 @@ class TrailsApp {
             return 0;
         });
 
-        trailsContainer.innerHTML = sortedTrails.map(trail => {
-            const isSaved = this.savedTrails.some(t => t.id === trail.id);
-            const distanceHtml = trail.distance ? 
-                `<span class="trail-distance">${trail.distance} km</span> • ` : '';
-            
-            return `
-                <div class="trail-item" data-trail-id="${trail.id}">
-                    <div class="trail-info" onclick="app.focusTrail(${trail.id})">
-                        <div class="trail-name">${trail.name} ${isSaved ? '<i class="fas fa-bookmark" style="font-size: 0.8em;"></i>' : ''}</div>
-                        <div class="trail-details">${distanceHtml}${trail.description}</div>
-                    </div>
-                    <div class="trail-actions">
-                        ${!isSaved ? 
-                            `<button class="save-btn" onclick="app.saveTrail(${trail.id})" title="Save trail" aria-label="Save trail">
-                                <i class="fas fa-bookmark"></i>
-                            </button>` : 
-                            `<button class="remove-btn" onclick="app.removeTrail(${trail.id})" title="Remove trail" aria-label="Remove trail">
-                                <i class="fas fa-trash"></i>
-                            </button>`
-                        }
-                        <button class="osm-btn" onclick="window.open('https://www.openstreetmap.org/${trail.osmType || 'relation'}/${trail.id}', '_blank')" title="View on OpenStreetMap" aria-label="View on OSM">
-                            <i class="fas fa-map"></i>
-                        </button>
-                    </div>
-                </div>
-            `;
-        }).join('');
-
-        // Add hover listeners
         sortedTrails.forEach(trail => {
-            const listItem = document.querySelector(`[data-trail-id="${trail.id}"]`);
-            if (listItem) {
-                listItem.addEventListener('mouseenter', () => {
-                    this.highlightTrail(trail.id, true);
-                });
-                listItem.addEventListener('mouseleave', () => {
-                    this.highlightTrail(trail.id, false);
-                });
-                // Touch support
-                listItem.addEventListener('touchstart', () => {
-                    this.highlightTrail(trail.id, true);
-                });
+            const isSaved = this.savedTrails.some(t => t.id === trail.id);
+            
+            // Create trail item
+            const trailItem = document.createElement('div');
+            trailItem.className = 'trail-item';
+            trailItem.setAttribute('data-trail-id', trail.id);
+            
+            // Trail info section
+            const trailInfo = document.createElement('div');
+            trailInfo.className = 'trail-info';
+            
+            const trailName = document.createElement('div');
+            trailName.className = 'trail-name';
+            trailName.textContent = trail.name;
+            if (isSaved) {
+                const bookmarkIcon = document.createElement('i');
+                bookmarkIcon.className = 'fas fa-bookmark';
+                bookmarkIcon.style.fontSize = '0.8em';
+                trailName.appendChild(document.createTextNode(' '));
+                trailName.appendChild(bookmarkIcon);
             }
+            
+            const trailDetails = document.createElement('div');
+            trailDetails.className = 'trail-details';
+            if (trail.distance) {
+                const distanceSpan = document.createElement('span');
+                distanceSpan.className = 'trail-distance';
+                distanceSpan.textContent = `${trail.distance} km`;
+                trailDetails.appendChild(distanceSpan);
+                trailDetails.appendChild(document.createTextNode(' • '));
+            }
+            trailDetails.appendChild(document.createTextNode(trail.description));
+            
+            trailInfo.appendChild(trailName);
+            trailInfo.appendChild(trailDetails);
+            trailInfo.addEventListener('click', () => this.focusTrail(trail.id));
+            
+            // Trail actions section
+            const trailActions = document.createElement('div');
+            trailActions.className = 'trail-actions';
+            
+            if (!isSaved) {
+                const saveBtn = document.createElement('button');
+                saveBtn.className = 'save-btn';
+                saveBtn.title = 'Save trail';
+                saveBtn.setAttribute('aria-label', 'Save trail');
+                saveBtn.innerHTML = '<i class="fas fa-bookmark"></i>';
+                saveBtn.addEventListener('click', () => this.saveTrail(trail.id));
+                trailActions.appendChild(saveBtn);
+            } else {
+                const removeBtn = document.createElement('button');
+                removeBtn.className = 'remove-btn';
+                removeBtn.title = 'Remove trail';
+                removeBtn.setAttribute('aria-label', 'Remove trail');
+                removeBtn.innerHTML = '<i class="fas fa-trash"></i>';
+                removeBtn.addEventListener('click', () => this.removeTrail(trail.id));
+                trailActions.appendChild(removeBtn);
+            }
+            
+            const osmBtn = document.createElement('button');
+            osmBtn.className = 'osm-btn';
+            osmBtn.title = 'View on OpenStreetMap';
+            osmBtn.setAttribute('aria-label', 'View on OSM');
+            osmBtn.innerHTML = '<i class="fas fa-map"></i>';
+            osmBtn.addEventListener('click', () => {
+                window.open(`https://www.openstreetmap.org/${trail.osmType || 'relation'}/${trail.id}`, '_blank');
+            });
+            trailActions.appendChild(osmBtn);
+            
+            trailItem.appendChild(trailInfo);
+            trailItem.appendChild(trailActions);
+            trailsContainer.appendChild(trailItem);
+            
+            // Add hover listeners
+            trailItem.addEventListener('mouseenter', () => {
+                this.highlightTrail(trail.id, true);
+            });
+            trailItem.addEventListener('mouseleave', () => {
+                this.highlightTrail(trail.id, false);
+            });
+            // Touch support
+            trailItem.addEventListener('touchstart', () => {
+                this.highlightTrail(trail.id, true);
+            });
         });
     }
 
