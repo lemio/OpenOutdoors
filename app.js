@@ -164,16 +164,31 @@ class TrailsApp {
                 out skel qt;
             `;
 
+            // Add timeout to fetch request
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
             const response = await fetch('https://overpass-api.de/api/interpreter', {
                 method: 'POST',
-                body: overpassQuery
+                body: overpassQuery,
+                signal: controller.signal
             });
+
+            clearTimeout(timeoutId);
+
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
 
             const data = await response.json();
             this.processSearchResults(data, query);
         } catch (error) {
             console.error('Search error:', error);
-            this.showToast('Error searching trails. Please try again.');
+            if (error.name === 'AbortError') {
+                this.showToast('Search timed out. Please try a smaller area.');
+            } else {
+                this.showToast('Error searching trails. Please try again.');
+            }
         } finally {
             this.showLoading(false);
         }
@@ -206,16 +221,31 @@ class TrailsApp {
                 out skel qt;
             `;
 
+            // Add timeout to fetch request
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
             const response = await fetch('https://overpass-api.de/api/interpreter', {
                 method: 'POST',
-                body: overpassQuery
+                body: overpassQuery,
+                signal: controller.signal
             });
+
+            clearTimeout(timeoutId);
+
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
 
             const data = await response.json();
             this.processSearchResults(data, 'nearby trails');
         } catch (error) {
             console.error('Nearby search error:', error);
-            this.showToast('Error finding nearby trails. Please try again.');
+            if (error.name === 'AbortError') {
+                this.showToast('Search timed out. Please try a smaller radius.');
+            } else {
+                this.showToast('Error finding nearby trails. Please try again.');
+            }
         } finally {
             this.showLoading(false);
         }
@@ -476,6 +506,13 @@ class TrailsApp {
         const encoded = encodeURIComponent(JSON.stringify(trailsData));
         const shareUrl = `${window.location.origin}${window.location.pathname}?trails=${encoded}`;
 
+        // Check URL length (most browsers support ~2048 chars, be conservative)
+        if (shareUrl.length > 2000) {
+            this.showToast('Too many trails to share via URL. Try sharing fewer trails.');
+            console.warn('Share URL too long:', shareUrl.length, 'characters');
+            return;
+        }
+
         // Copy to clipboard
         if (navigator.clipboard && navigator.clipboard.writeText) {
             navigator.clipboard.writeText(shareUrl).then(() => {
@@ -489,8 +526,23 @@ class TrailsApp {
     }
 
     showShareDialog(url) {
-        // Fallback: show the URL in a prompt
-        prompt('Copy this link to share your trails:', url);
+        // Create a better fallback dialog instead of using prompt()
+        const toast = document.getElementById('toast');
+        toast.innerHTML = `
+            <div style="text-align: left;">
+                <strong>Share Link:</strong><br>
+                <input type="text" value="${url.replace(/"/g, '&quot;')}" 
+                       readonly 
+                       style="width: 100%; margin: 8px 0; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
+                       onclick="this.select()">
+                <small>Click the link to select, then copy it manually</small>
+            </div>
+        `;
+        toast.classList.add('show');
+        setTimeout(() => {
+            toast.classList.remove('show');
+            toast.textContent = ''; // Reset to text content
+        }, 10000); // Show for 10 seconds
     }
 
     loadSharedTrails() {

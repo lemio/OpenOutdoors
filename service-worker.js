@@ -12,6 +12,12 @@ const urlsToCache = [
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
 ];
 
+// Domains to exclude from caching (API endpoints that should always be fresh)
+const NO_CACHE_DOMAINS = [
+  'overpass-api.de',
+  'nominatim.openstreetmap.org'
+];
+
 // Install event - cache static assets
 self.addEventListener('install', event => {
   event.waitUntil(
@@ -54,8 +60,11 @@ self.addEventListener('fetch', event => {
           // Cache the fetched response for future use
           caches.open(CACHE_NAME)
             .then(cache => {
-              // Don't cache API requests
-              if (!event.request.url.includes('overpass-api.de')) {
+              // Don't cache API requests from excluded domains
+              const shouldCache = !NO_CACHE_DOMAINS.some(domain => 
+                event.request.url.includes(domain)
+              );
+              if (shouldCache) {
                 cache.put(event.request, responseToCache);
               }
             });
