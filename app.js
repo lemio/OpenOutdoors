@@ -10,7 +10,12 @@ class TrailsApp {
         this.allTrails = []; // Combined list of all trails
         this.currentLocation = null;
         this.highlightedTrailId = null;
-
+        
+        // Performance optimization: Cache data structures
+        this.trailsById = new Map(); // Quick lookup by ID
+        this.savedTrailIds = new Set(); // Quick saved check
+        this.parentGroupsByName = new Map(); // Merge parents by name
+        
         this.init();
     }
 
@@ -352,6 +357,9 @@ class TrailsApp {
         
         // Keep saved trails and add new search results
         this.allTrails = [...this.savedTrails, ...newTrails];
+        
+        // Update indexes for fast lookup
+        this.updateTrailIndexes();
 
         // Display trails on map
         this.displayTrailsOnMap(this.allTrails);
@@ -542,7 +550,7 @@ class TrailsApp {
         // Highlight on map
         const layerGroup = this.trailLayers.get(trailId);
         if (layerGroup) {
-            const isSaved = this.savedTrails.some(t => t.id === trailId);
+            const isSaved = this.savedTrailIds.has(trailId);
             if (highlight) {
                 if (layerGroup.allPolylines) {
                     layerGroup.allPolylines.forEach(polyline => {
@@ -590,6 +598,7 @@ class TrailsApp {
         trailsContainer.innerHTML = '';
 
         // Separate trails into those with parents (children) and standalone trails
+        // Use Set for O(1) lookups
         const childTrails = new Set();
         const parentTrails = [];
         
@@ -605,9 +614,10 @@ class TrailsApp {
         );
 
         // Sort: saved trails first, then alphabetically by name
+        // Use cached savedTrailIds for O(1) checks
         const sortTrails = (trails) => trails.sort((a, b) => {
-            const aIsSaved = this.savedTrails.some(t => t.id === a.id);
-            const bIsSaved = this.savedTrails.some(t => t.id === b.id);
+            const aIsSaved = this.savedTrailIds.has(a.id);
+            const bIsSaved = this.savedTrailIds.has(b.id);
             if (aIsSaved && !bIsSaved) return -1;
             if (!aIsSaved && bIsSaved) return 1;
             return a.name.localeCompare(b.name);
@@ -628,7 +638,7 @@ class TrailsApp {
     }
 
     createParentTrailElement(parent, container) {
-        const isSaved = this.savedTrails.some(t => t.id === parent.id);
+        const isSaved = this.savedTrailIds.has(parent.id);
         
         // Parent container
         const parentContainer = document.createElement('div');
@@ -783,7 +793,7 @@ class TrailsApp {
     }
 
     createTrailElement(trail, container, isChild = false) {
-        const isSaved = this.savedTrails.some(t => t.id === trail.id);
+        const isSaved = this.savedTrailIds.has(trail.id);
         
         // Create trail item
         const trailItem = document.createElement('div');
@@ -892,7 +902,7 @@ class TrailsApp {
             this.highlightedTrailId = null;
             const layerGroup = this.trailLayers.get(trailId);
             if (layerGroup) {
-                const isSaved = this.savedTrails.some(t => t.id === trailId);
+                const isSaved = this.savedTrailIds.has(trailId);
                 const color = isSaved ? '#2c7a3f' : '#e74c3c';
                 if (layerGroup.allPolylines) {
                     layerGroup.allPolylines.forEach(polyline => {
@@ -919,7 +929,7 @@ class TrailsApp {
             if (this.highlightedTrailId) {
                 const prevLayerGroup = this.trailLayers.get(this.highlightedTrailId);
                 if (prevLayerGroup) {
-                    const isSaved = this.savedTrails.some(t => t.id === this.highlightedTrailId);
+                    const isSaved = this.savedTrailIds.has(this.highlightedTrailId);
                     const color = isSaved ? '#2c7a3f' : '#e74c3c';
                     if (prevLayerGroup.allPolylines) {
                         prevLayerGroup.allPolylines.forEach(polyline => {
@@ -976,7 +986,7 @@ class TrailsApp {
     }
 
     focusTrail(trailId) {
-        const trail = this.allTrails.find(t => t.id == trailId);
+        const trail = this.trailsById.get(trailId);
         
         if (!trail) {
             return;
@@ -1012,14 +1022,14 @@ class TrailsApp {
     }
 
     saveTrail(trailId) {
-        const trail = this.allTrails.find(t => t.id == trailId);
+        const trail = this.trailsById.get(trailId);
         
         if (!trail) {
             return;
         }
 
-        // Check if already saved
-        if (this.savedTrails.some(t => t.id === trail.id)) {
+        // Check if already saved using cached Set
+        if (this.savedTrailIds.has(trail.id)) {
             this.showToast('Trail already saved!');
             return;
         }
@@ -1044,13 +1054,12 @@ class TrailsApp {
     }
 
     removeTrail(trailId) {
-        const trail = this.savedTrails.find(t => t.id == trailId);
-        
         this.savedTrails = this.savedTrails.filter(t => t.id != trailId);
         this.saveSavedTrails();
         
         // Remove from allTrails if it was only saved (not from search)
         this.allTrails = this.allTrails.filter(t => t.id != trailId);
+        this.updateTrailIndexes();
         
         // Remove from map
         const layer = this.trailLayers.get(trailId);
@@ -1079,9 +1088,9 @@ class TrailsApp {
                 }
             });
             
-            this.allTrails = this.allTrails.filter(t => 
-                !this.savedTrails.some(saved => saved.id === t.id)
-            );
+            // Use cached Set for faster filtering
+            this.allTrails = this.allTrails.filter(t => !this.savedTrailIds.has(t.id));
+            this.updateTrailIndexes();
             
             this.savedTrails = [];
             this.saveSavedTrails();
@@ -1093,7 +1102,10 @@ class TrailsApp {
     loadSavedTrails() {
         try {
             const saved = localStorage.getItem('openoutdoors_trails');
-            return saved ? JSON.parse(saved) : [];
+            const trails = saved ? JSON.parse(saved) : [];
+            // Update cache
+            this.savedTrailIds = new Set(trails.map(t => t.id));
+            return trails;
         } catch (error) {
             console.error('Error loading saved trails:', error);
             return [];
@@ -1103,10 +1115,20 @@ class TrailsApp {
     saveSavedTrails() {
         try {
             localStorage.setItem('openoutdoors_trails', JSON.stringify(this.savedTrails));
+            // Update cache
+            this.savedTrailIds = new Set(this.savedTrails.map(t => t.id));
         } catch (error) {
             console.error('Error saving trails:', error);
             this.showToast('Error saving trails');
         }
+    }
+    
+    // Helper method to update trail indexes
+    updateTrailIndexes() {
+        this.trailsById.clear();
+        this.allTrails.forEach(trail => {
+            this.trailsById.set(trail.id, trail);
+        });
     }
 
     shareTrails() {
@@ -1458,6 +1480,7 @@ class TrailsApp {
             // Track which trails have been processed to avoid loops
             const processed = new Set();
             const parentMap = new Map(); // Map of parent ID to children
+            const parentsByName = new Map(); // Map of parent name to parent IDs (for merging)
             
             // Process trails in batches with rate limiting
             // Process up to 3 at a time to speed things up while respecting rate limit
@@ -1484,7 +1507,7 @@ class TrailsApp {
                 
                 const results = await Promise.all(promises);
                 
-                // Group by parent
+                // Group by parent ID and track parent names
                 results.forEach(result => {
                     if (result) {
                         result.parents.forEach(parent => {
@@ -1492,40 +1515,78 @@ class TrailsApp {
                                 parentMap.set(parent.id, []);
                             }
                             parentMap.get(parent.id).push(result.trail);
+                            
+                            // Track parent name for merging
+                            if (!parentsByName.has(parent.name)) {
+                                parentsByName.set(parent.name, []);
+                            }
+                            if (!parentsByName.get(parent.name).includes(parent.id)) {
+                                parentsByName.get(parent.name).push(parent.id);
+                            }
                         });
                     }
                 });
             }
             
             // Create parent route objects from the OSM API data (don't fetch from Overpass)
-            // This avoids 504 errors and is much faster
-            for (const [parentId, children] of parentMap.entries()) {
-                const existingParent = this.allTrails.find(t => t.id === parentId);
+            // Merge parents with the same name
+            this.parentGroupsByName.clear();
+            
+            for (const [parentName, parentIds] of parentsByName.entries()) {
+                // Collect all children from all parents with this name
+                const allChildren = new Set();
+                const parentInfos = [];
                 
-                if (!existingParent) {
-                    // Create a lightweight parent object from the first child's parent info
-                    const parentInfo = children[0].parentRelations?.find(p => p.id === parentId);
+                parentIds.forEach(parentId => {
+                    const children = parentMap.get(parentId) || [];
+                    children.forEach(child => allChildren.add(child));
+                    
+                    // Get parent info from first child that has it
+                    const parentInfo = children[0]?.parentRelations?.find(p => p.id === parentId);
                     if (parentInfo) {
+                        parentInfos.push({ id: parentId, info: parentInfo });
+                    }
+                });
+                
+                if (parentInfos.length > 0 && allChildren.size > 0) {
+                    const childrenArray = Array.from(allChildren);
+                    
+                    // Use the first parent's info as the primary
+                    const primaryParentInfo = parentInfos[0].info;
+                    const primaryParentId = parentInfos[0].id;
+                    
+                    // Check if parent already exists in allTrails
+                    const existingParent = this.trailsById.get(primaryParentId);
+                    
+                    if (!existingParent) {
                         const parentTrail = {
-                            id: parentId,
+                            id: primaryParentId,
                             type: 'relation',
                             osmType: 'relation',
-                            name: parentInfo.name,
-                            description: this.getTrailDescription(parentInfo.tags),
-                            tags: parentInfo.tags,
+                            name: parentName,
+                            description: this.getTrailDescription(primaryParentInfo.tags),
+                            tags: primaryParentInfo.tags,
                             members: [],
                             coordinates: [], // No coordinates for parent-only display
                             wayGroups: [],
-                            distance: parentInfo.tags?.distance || null,
-                            isSuperRoute: parentInfo.isSuperRoute,
-                            childRelations: children,
-                            isParentOnly: true // Flag to indicate this is a lightweight parent
+                            distance: primaryParentInfo.tags?.distance || null,
+                            isSuperRoute: primaryParentInfo.isSuperRoute,
+                            childRelations: childrenArray,
+                            isParentOnly: true, // Flag to indicate this is a lightweight parent
+                            mergedParentIds: parentIds // Track all merged parent IDs
                         };
                         this.allTrails.push(parentTrail);
+                        this.trailsById.set(primaryParentId, parentTrail);
+                    } else {
+                        // Update existing parent with children
+                        existingParent.childRelations = childrenArray;
+                        existingParent.mergedParentIds = parentIds;
                     }
-                } else {
-                    // Update existing parent with children
-                    existingParent.childRelations = children;
+                    
+                    this.parentGroupsByName.set(parentName, {
+                        parentId: primaryParentId,
+                        children: childrenArray
+                    });
                 }
             }
             
@@ -1540,21 +1601,21 @@ class TrailsApp {
     }
 
     saveParentRoute(parentId) {
-        const parent = this.allTrails.find(t => t.id === parentId);
+        const parent = this.trailsById.get(parentId);
         
         if (!parent) {
             return;
         }
         
-        // Save the parent
-        if (!this.savedTrails.some(t => t.id === parent.id)) {
+        // Save the parent using cached Set for faster checks
+        if (!this.savedTrailIds.has(parent.id)) {
             this.savedTrails.push(parent);
         }
         
         // Save all children
         if (parent.childRelations) {
             parent.childRelations.forEach(child => {
-                if (!this.savedTrails.some(t => t.id === child.id)) {
+                if (!this.savedTrailIds.has(child.id)) {
                     this.savedTrails.push(child);
                 }
                 
