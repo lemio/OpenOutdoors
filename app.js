@@ -5,10 +5,11 @@ class TrailsApp {
     constructor() {
         this.map = null;
         this.userMarker = null;
-        this.trailLayers = [];
+        this.trailLayers = new Map(); // Map trail ID to layer
         this.savedTrails = this.loadSavedTrails();
-        this.searchResults = [];
+        this.allTrails = []; // Combined list of all trails
         this.currentLocation = null;
+        this.highlightedTrailId = null;
 
         this.init();
     }
@@ -24,7 +25,7 @@ class TrailsApp {
         this.setupEventListeners();
 
         // Update UI
-        this.updateSavedTrailsUI();
+        this.updateTrailsUI();
 
         // Register service worker for PWA
         this.registerServiceWorker();
@@ -42,16 +43,9 @@ class TrailsApp {
     }
 
     setupEventListeners() {
-        // Search button
+        // Search button - searches in current map view
         document.getElementById('searchBtn').addEventListener('click', () => {
             this.searchTrails();
-        });
-
-        // Enter key on search input
-        document.getElementById('searchInput').addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                this.searchTrails();
-            }
         });
 
         // My Location button
@@ -133,13 +127,6 @@ class TrailsApp {
     }
 
     async searchTrails() {
-        const query = document.getElementById('searchInput').value.trim();
-        
-        if (!query) {
-            this.showToast('Please enter a search term');
-            return;
-        }
-
         this.showLoading(true);
         
         try {
@@ -150,14 +137,15 @@ class TrailsApp {
             const north = bounds.getNorth();
             const east = bounds.getEast();
 
-            // Build Overpass query for hiking trails
+            // Build Overpass query focusing on hiking networks/relations
             const overpassQuery = `
                 [out:json][timeout:25];
                 (
-                    way["route"="hiking"](${south},${west},${north},${east});
-                    way["highway"="path"]["sac_scale"](${south},${west},${north},${east});
-                    way["highway"="footway"]["trail_visibility"](${south},${west},${north},${east});
                     relation["route"="hiking"](${south},${west},${north},${east});
+                    relation["route"="foot"](${south},${west},${north},${east});
+                    relation["network"="rwn"](${south},${west},${north},${east});
+                    relation["network"="nwn"](${south},${west},${north},${east});
+                    relation["network"="iwn"](${south},${west},${north},${east});
                 );
                 out body;
                 >;
@@ -166,7 +154,7 @@ class TrailsApp {
 
             // Add timeout to fetch request
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+            const timeoutId = setTimeout(() => controller.abort(), 30000);
 
             const response = await fetch('https://overpass-api.de/api/interpreter', {
                 method: 'POST',
@@ -181,7 +169,7 @@ class TrailsApp {
             }
 
             const data = await response.json();
-            this.processSearchResults(data, query);
+            this.processSearchResults(data);
         } catch (error) {
             console.error('Search error:', error);
             if (error.name === 'AbortError') {
@@ -207,14 +195,15 @@ class TrailsApp {
             const radiusMeters = radius * 1000;
             const { lat, lon } = this.currentLocation;
 
-            // Build Overpass query for nearby hiking trails
+            // Build Overpass query for nearby hiking networks/relations
             const overpassQuery = `
                 [out:json][timeout:25];
                 (
-                    way["route"="hiking"](around:${radiusMeters},${lat},${lon});
-                    way["highway"="path"]["sac_scale"](around:${radiusMeters},${lat},${lon});
-                    way["highway"="footway"]["trail_visibility"](around:${radiusMeters},${lat},${lon});
                     relation["route"="hiking"](around:${radiusMeters},${lat},${lon});
+                    relation["route"="foot"](around:${radiusMeters},${lat},${lon});
+                    relation["network"="rwn"](around:${radiusMeters},${lat},${lon});
+                    relation["network"="nwn"](around:${radiusMeters},${lat},${lon});
+                    relation["network"="iwn"](around:${radiusMeters},${lat},${lon});
                 );
                 out body;
                 >;
@@ -223,7 +212,7 @@ class TrailsApp {
 
             // Add timeout to fetch request
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+            const timeoutId = setTimeout(() => controller.abort(), 30000);
 
             const response = await fetch('https://overpass-api.de/api/interpreter', {
                 method: 'POST',
@@ -238,7 +227,7 @@ class TrailsApp {
             }
 
             const data = await response.json();
-            this.processSearchResults(data, 'nearby trails');
+            this.processSearchResults(data);
         } catch (error) {
             console.error('Nearby search error:', error);
             if (error.name === 'AbortError') {
@@ -251,13 +240,13 @@ class TrailsApp {
         }
     }
 
-    processSearchResults(data, query) {
-        // Clear previous results
+    processSearchResults(data) {
+        // Clear previous layers
         this.clearTrailLayers();
-        this.searchResults = [];
 
         const ways = {};
         const nodes = {};
+        const relations = [];
 
         // First pass: collect all nodes
         data.elements.forEach(element => {
@@ -266,7 +255,7 @@ class TrailsApp {
             }
         });
 
-        // Second pass: process ways and relations
+        // Second pass: collect ways
         data.elements.forEach(element => {
             if (element.type === 'way' && element.nodes) {
                 const coords = element.nodes
@@ -275,50 +264,78 @@ class TrailsApp {
                     .map(node => [node.lat, node.lon]);
 
                 if (coords.length > 0) {
-                    const trail = {
+                    ways[element.id] = {
                         id: element.id,
                         type: 'way',
-                        name: element.tags?.name || element.tags?.ref || `Trail ${element.id}`,
-                        description: this.getTrailDescription(element.tags),
-                        tags: element.tags,
+                        tags: element.tags || {},
                         coordinates: coords
                     };
-
-                    this.searchResults.push(trail);
-                    ways[element.id] = trail;
                 }
-            } else if (element.type === 'relation' && element.tags?.type === 'route') {
-                // Process relation (collection of ways)
-                const trail = {
-                    id: element.id,
-                    type: 'relation',
-                    name: element.tags?.name || element.tags?.ref || `Trail ${element.id}`,
-                    description: this.getTrailDescription(element.tags),
-                    tags: element.tags,
-                    members: element.members
-                };
-
-                this.searchResults.push(trail);
             }
         });
 
-        // Display results on map
-        this.displayTrailsOnMap(this.searchResults);
-        this.updateSearchResultsUI();
+        // Third pass: process relations
+        data.elements.forEach(element => {
+            if (element.type === 'relation') {
+                const trail = {
+                    id: element.id,
+                    type: 'relation',
+                    osmType: 'relation',
+                    name: element.tags?.name || element.tags?.ref || `Trail ${element.id}`,
+                    description: this.getTrailDescription(element.tags),
+                    tags: element.tags || {},
+                    members: element.members || [],
+                    coordinates: [],
+                    distance: element.tags?.distance || null
+                };
 
-        if (this.searchResults.length === 0) {
+                // Collect coordinates from member ways
+                if (element.members) {
+                    element.members.forEach(member => {
+                        if (member.type === 'way' && ways[member.ref]) {
+                            trail.coordinates.push(...ways[member.ref].coordinates);
+                        }
+                    });
+                }
+
+                if (trail.coordinates.length > 0) {
+                    relations.push(trail);
+                }
+            }
+        });
+
+        // Update allTrails with new search results, preserving saved trails
+        const newTrails = relations.filter(trail => 
+            !this.savedTrails.some(saved => saved.id === trail.id)
+        );
+        
+        // Keep saved trails and add new search results
+        this.allTrails = [...this.savedTrails, ...newTrails];
+
+        // Display trails on map
+        this.displayTrailsOnMap(this.allTrails);
+        this.updateTrailsUI();
+
+        if (newTrails.length === 0 && this.savedTrails.length === 0) {
             this.showToast('No trails found. Try adjusting the search area or radius.');
         } else {
-            this.showToast(`Found ${this.searchResults.length} trails!`);
+            this.showToast(`Found ${newTrails.length} new trails!`);
         }
     }
 
     getTrailDescription(tags) {
         const parts = [];
         
-        if (tags?.distance) {
-            parts.push(`${tags.distance} km`);
+        if (tags?.network) {
+            const networkNames = {
+                'iwn': 'International',
+                'nwn': 'National',
+                'rwn': 'Regional',
+                'lwn': 'Local'
+            };
+            parts.push(networkNames[tags.network] || tags.network);
         }
+        
         if (tags?.sac_scale) {
             parts.push(`Difficulty: ${tags.sac_scale}`);
         }
@@ -328,9 +345,6 @@ class TrailsApp {
         if (tags?.surface) {
             parts.push(`Surface: ${tags.surface}`);
         }
-        if (tags?.highway) {
-            parts.push(`Type: ${tags.highway}`);
-        }
 
         return parts.length > 0 ? parts.join(' • ') : 'Hiking trail';
     }
@@ -338,29 +352,57 @@ class TrailsApp {
     displayTrailsOnMap(trails) {
         trails.forEach(trail => {
             if (trail.coordinates && trail.coordinates.length > 0) {
+                // Check if already on map
+                if (this.trailLayers.has(trail.id)) {
+                    return;
+                }
+
+                const isSaved = this.savedTrails.some(t => t.id === trail.id);
                 const polyline = L.polyline(trail.coordinates, {
-                    color: '#e74c3c',
+                    color: isSaved ? '#2c7a3f' : '#e74c3c',
                     weight: 4,
-                    opacity: 0.7
+                    opacity: 0.7,
+                    trailId: trail.id
                 }).addTo(this.map);
 
                 polyline.bindPopup(`
                     <div style="min-width: 200px;">
                         <strong>${trail.name}</strong><br>
+                        ${trail.distance ? `<span style="color: #2c7a3f; font-weight: 600;">${trail.distance} km</span><br>` : ''}
                         <small>${trail.description}</small><br>
-                        <button onclick="app.saveTrail('${trail.id}')" style="margin-top: 8px; padding: 4px 12px; background: #2c7a3f; color: white; border: none; border-radius: 4px; cursor: pointer;">
-                            💾 Save Trail
-                        </button>
+                        <div style="margin-top: 8px; display: flex; gap: 4px;">
+                            ${!isSaved ? `<button onclick="app.saveTrail(${trail.id})" style="padding: 4px 12px; background: #2c7a3f; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                                <i class="fas fa-bookmark"></i> Save
+                            </button>` : ''}
+                            <a href="https://www.openstreetmap.org/${trail.osmType || 'relation'}/${trail.id}" target="_blank" rel="noopener" 
+                               style="padding: 4px 12px; background: #7ebc6f; color: white; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block;">
+                                <i class="fas fa-map"></i> OSM
+                            </a>
+                        </div>
                     </div>
                 `);
 
-                this.trailLayers.push(polyline);
+                // Add hover effect for map polyline
+                polyline.on('mouseover', () => {
+                    this.highlightTrail(trail.id, true);
+                });
+
+                polyline.on('mouseout', () => {
+                    this.highlightTrail(trail.id, false);
+                });
+
+                // Add click to focus
+                polyline.on('click', () => {
+                    this.focusTrail(trail.id);
+                });
+
+                this.trailLayers.set(trail.id, polyline);
             }
         });
 
         // Fit map to show all trails
-        if (this.trailLayers.length > 0) {
-            const group = L.featureGroup(this.trailLayers);
+        if (this.trailLayers.size > 0) {
+            const group = L.featureGroup(Array.from(this.trailLayers.values()));
             this.map.fitBounds(group.getBounds().pad(0.1));
         }
     }
@@ -369,45 +411,116 @@ class TrailsApp {
         this.trailLayers.forEach(layer => {
             this.map.removeLayer(layer);
         });
-        this.trailLayers = [];
+        this.trailLayers.clear();
     }
 
-    updateSearchResultsUI() {
-        const resultsContainer = document.getElementById('searchResults');
-        const resultsCount = document.getElementById('resultsCount');
-        
-        resultsCount.textContent = this.searchResults.length;
+    highlightTrail(trailId, highlight) {
+        // Highlight on map
+        const layer = this.trailLayers.get(trailId);
+        if (layer) {
+            if (highlight) {
+                layer.setStyle({ weight: 6, opacity: 1 });
+                layer.bringToFront();
+            } else {
+                const isSaved = this.savedTrails.some(t => t.id === trailId);
+                layer.setStyle({ weight: 4, opacity: 0.7 });
+            }
+        }
 
-        if (this.searchResults.length === 0) {
-            resultsContainer.innerHTML = '<div class="empty-state">No trails found</div>';
+        // Highlight in list
+        const listItem = document.querySelector(`[data-trail-id="${trailId}"]`);
+        if (listItem) {
+            if (highlight) {
+                listItem.classList.add('highlighted');
+            } else {
+                listItem.classList.remove('highlighted');
+            }
+        }
+    }
+
+    updateTrailsUI() {
+        const trailsContainer = document.getElementById('trailsList');
+        const trailsCount = document.getElementById('trailsCount');
+        
+        trailsCount.textContent = this.allTrails.length;
+
+        if (this.allTrails.length === 0) {
+            trailsContainer.innerHTML = '<div class="empty-state">No trails found. Use the search button to find trails in the current map view.</div>';
             return;
         }
 
-        resultsContainer.innerHTML = this.searchResults.map(trail => `
-            <div class="trail-item" onclick="app.focusTrail('${trail.id}')">
-                <div class="trail-info">
-                    <div class="trail-name">${trail.name}</div>
-                    <div class="trail-details">${trail.description}</div>
+        // Sort: saved trails first
+        const sortedTrails = [...this.allTrails].sort((a, b) => {
+            const aIsSaved = this.savedTrails.some(t => t.id === a.id);
+            const bIsSaved = this.savedTrails.some(t => t.id === b.id);
+            if (aIsSaved && !bIsSaved) return -1;
+            if (!aIsSaved && bIsSaved) return 1;
+            return 0;
+        });
+
+        trailsContainer.innerHTML = sortedTrails.map(trail => {
+            const isSaved = this.savedTrails.some(t => t.id === trail.id);
+            const distanceHtml = trail.distance ? 
+                `<span class="trail-distance">${trail.distance} km</span> • ` : '';
+            
+            return `
+                <div class="trail-item" data-trail-id="${trail.id}">
+                    <div class="trail-info" onclick="app.focusTrail(${trail.id})">
+                        <div class="trail-name">${trail.name} ${isSaved ? '<i class="fas fa-bookmark" style="font-size: 0.8em;"></i>' : ''}</div>
+                        <div class="trail-details">${distanceHtml}${trail.description}</div>
+                    </div>
+                    <div class="trail-actions">
+                        ${!isSaved ? 
+                            `<button class="save-btn" onclick="app.saveTrail(${trail.id})" title="Save trail" aria-label="Save trail">
+                                <i class="fas fa-bookmark"></i>
+                            </button>` : 
+                            `<button class="remove-btn" onclick="app.removeTrail(${trail.id})" title="Remove trail" aria-label="Remove trail">
+                                <i class="fas fa-trash"></i>
+                            </button>`
+                        }
+                        <button class="osm-btn" onclick="window.open('https://www.openstreetmap.org/${trail.osmType || 'relation'}/${trail.id}', '_blank')" title="View on OpenStreetMap" aria-label="View on OSM">
+                            <i class="fas fa-map"></i>
+                        </button>
+                    </div>
                 </div>
-                <div class="trail-actions">
-                    <button onclick="event.stopPropagation(); app.saveTrail('${trail.id}')">💾</button>
-                </div>
-            </div>
-        `).join('');
+            `;
+        }).join('');
+
+        // Add hover listeners
+        sortedTrails.forEach(trail => {
+            const listItem = document.querySelector(`[data-trail-id="${trail.id}"]`);
+            if (listItem) {
+                listItem.addEventListener('mouseenter', () => {
+                    this.highlightTrail(trail.id, true);
+                });
+                listItem.addEventListener('mouseleave', () => {
+                    this.highlightTrail(trail.id, false);
+                });
+                // Touch support
+                listItem.addEventListener('touchstart', () => {
+                    this.highlightTrail(trail.id, true);
+                });
+            }
+        });
     }
 
     focusTrail(trailId) {
-        const trail = this.searchResults.find(t => t.id == trailId) || 
-                     this.savedTrails.find(t => t.id == trailId);
+        const trail = this.allTrails.find(t => t.id == trailId);
         
         if (trail && trail.coordinates && trail.coordinates.length > 0) {
             const bounds = L.latLngBounds(trail.coordinates);
             this.map.fitBounds(bounds.pad(0.2));
+            
+            // Open popup if layer exists
+            const layer = this.trailLayers.get(trailId);
+            if (layer) {
+                layer.openPopup();
+            }
         }
     }
 
     saveTrail(trailId) {
-        const trail = this.searchResults.find(t => t.id == trailId);
+        const trail = this.allTrails.find(t => t.id == trailId);
         
         if (!trail) {
             return;
@@ -421,39 +534,35 @@ class TrailsApp {
 
         this.savedTrails.push(trail);
         this.saveSavedTrails();
-        this.updateSavedTrailsUI();
+        
+        // Update trail color on map
+        const layer = this.trailLayers.get(trailId);
+        if (layer) {
+            layer.setStyle({ color: '#2c7a3f' });
+        }
+        
+        this.updateTrailsUI();
         this.showToast(`Saved: ${trail.name}`);
     }
 
     removeTrail(trailId) {
+        const trail = this.savedTrails.find(t => t.id == trailId);
+        
         this.savedTrails = this.savedTrails.filter(t => t.id != trailId);
         this.saveSavedTrails();
-        this.updateSavedTrailsUI();
-        this.showToast('Trail removed');
-    }
-
-    updateSavedTrailsUI() {
-        const savedContainer = document.getElementById('savedTrailsList');
-        const savedCount = document.getElementById('savedCount');
         
-        savedCount.textContent = this.savedTrails.length;
-
-        if (this.savedTrails.length === 0) {
-            savedContainer.innerHTML = '<div class="empty-state">No saved trails</div>';
-            return;
+        // Remove from allTrails if it was only saved (not from search)
+        this.allTrails = this.allTrails.filter(t => t.id != trailId);
+        
+        // Remove from map
+        const layer = this.trailLayers.get(trailId);
+        if (layer) {
+            this.map.removeLayer(layer);
+            this.trailLayers.delete(trailId);
         }
-
-        savedContainer.innerHTML = this.savedTrails.map(trail => `
-            <div class="trail-item" onclick="app.focusTrail('${trail.id}')">
-                <div class="trail-info">
-                    <div class="trail-name">${trail.name}</div>
-                    <div class="trail-details">${trail.description}</div>
-                </div>
-                <div class="trail-actions">
-                    <button class="remove" onclick="event.stopPropagation(); app.removeTrail('${trail.id}')">🗑️</button>
-                </div>
-            </div>
-        `).join('');
+        
+        this.updateTrailsUI();
+        this.showToast('Trail removed');
     }
 
     clearSavedTrails() {
@@ -463,9 +572,22 @@ class TrailsApp {
         }
 
         if (confirm('Are you sure you want to clear all saved trails?')) {
+            // Remove saved trails from map and allTrails
+            this.savedTrails.forEach(trail => {
+                const layer = this.trailLayers.get(trail.id);
+                if (layer) {
+                    this.map.removeLayer(layer);
+                    this.trailLayers.delete(trail.id);
+                }
+            });
+            
+            this.allTrails = this.allTrails.filter(t => 
+                !this.savedTrails.some(saved => saved.id === t.id)
+            );
+            
             this.savedTrails = [];
             this.saveSavedTrails();
-            this.updateSavedTrailsUI();
+            this.updateTrailsUI();
             this.showToast('All trails cleared');
         }
     }
@@ -500,13 +622,15 @@ class TrailsApp {
             i: trail.id,
             n: trail.name,
             d: trail.description,
-            c: trail.coordinates
+            c: trail.coordinates,
+            di: trail.distance,
+            ot: trail.osmType
         }));
 
         const encoded = encodeURIComponent(JSON.stringify(trailsData));
         const shareUrl = `${window.location.origin}${window.location.pathname}?trails=${encoded}`;
 
-        // Check URL length (most browsers support ~2048 chars, be conservative)
+        // Check URL length
         if (shareUrl.length > 2000) {
             this.showToast('Too many trails to share via URL. Try sharing fewer trails.');
             console.warn('Share URL too long:', shareUrl.length, 'characters');
@@ -557,9 +681,13 @@ class TrailsApp {
             const trailsData = JSON.parse(decodeURIComponent(trailsParam));
             const trails = trailsData.map(t => ({
                 id: t.i,
+                type: 'relation',
+                osmType: t.ot || 'relation',
                 name: t.n,
                 description: t.d,
-                coordinates: t.c
+                coordinates: t.c,
+                distance: t.di,
+                tags: {}
             }));
 
             // Merge with existing saved trails
@@ -570,10 +698,11 @@ class TrailsApp {
             });
 
             this.saveSavedTrails();
-            this.updateSavedTrailsUI();
-
+            this.allTrails = [...this.savedTrails];
+            
             // Display shared trails on map
             this.displayTrailsOnMap(trails);
+            this.updateTrailsUI();
 
             this.showToast(`Loaded ${trails.length} shared trails!`);
 

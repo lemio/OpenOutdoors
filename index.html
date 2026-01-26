@@ -12,6 +12,11 @@
           integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" 
           crossorigin=""/>
     
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
+          integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA=="
+          crossorigin="anonymous" referrerpolicy="no-referrer" />
+    
     <!-- App styles -->
     <link rel="stylesheet" href="styles.css">
     
@@ -24,46 +29,37 @@
 </head>
 <body>
     <div class="app-container">
-        <!-- Header -->
-        <header class="app-header">
-            <h1>🥾 OpenOutdoors</h1>
-            <p class="subtitle">Discover Hiking Trails</p>
-        </header>
-
         <!-- Control Panel -->
         <div class="control-panel">
-            <!-- Search Section -->
-            <div class="search-section">
-                <div class="search-box">
-                    <input type="text" id="searchInput" placeholder="Search for trails..." />
-                    <button id="searchBtn" class="btn btn-primary">🔍 Search</button>
+            <!-- Toolbar -->
+            <div class="toolbar">
+                <button id="searchBtn" class="icon-btn" title="Search trails in current view" aria-label="Search trails">
+                    <i class="fas fa-search"></i>
+                </button>
+                <button id="locationBtn" class="icon-btn" title="Show my location" aria-label="My location">
+                    <i class="fas fa-location-crosshairs"></i>
+                </button>
+                <button id="nearbyBtn" class="icon-btn" title="Find trails near me" aria-label="Trails near me">
+                    <i class="fas fa-route"></i>
+                </button>
+                <input type="number" id="searchRadius" value="5" min="1" max="50" step="1" title="Search radius in kilometers">
+                <span class="radius-label">km</span>
+            </div>
+
+            <!-- Trails Section -->
+            <div class="trails-section">
+                <div class="trails-header">
+                    <h3>Trails (<span id="trailsCount">0</span>)</h3>
+                    <div class="trails-actions">
+                        <button id="shareBtn" class="icon-btn-small" title="Share saved trails" aria-label="Share">
+                            <i class="fas fa-share-nodes"></i>
+                        </button>
+                        <button id="clearBtn" class="icon-btn-small" title="Clear all saved trails" aria-label="Clear all">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </div>
                 </div>
-                <div class="search-options">
-                    <label>
-                        <input type="number" id="searchRadius" value="5" min="1" max="50" step="1">
-                        <span>km radius</span>
-                    </label>
-                </div>
-            </div>
-
-            <!-- Location Section -->
-            <div class="location-section">
-                <button id="locationBtn" class="btn btn-secondary">📍 My Location</button>
-                <button id="nearbyBtn" class="btn btn-secondary">🎯 Trails Near Me</button>
-            </div>
-
-            <!-- Saved Trails Section -->
-            <div class="saved-section">
-                <h3>Saved Trails (<span id="savedCount">0</span>)</h3>
-                <div id="savedTrailsList" class="trails-list"></div>
-                <button id="shareBtn" class="btn btn-success">🔗 Share Selected</button>
-                <button id="clearBtn" class="btn btn-danger">🗑️ Clear All</button>
-            </div>
-
-            <!-- Results Section -->
-            <div class="results-section">
-                <h3>Search Results (<span id="resultsCount">0</span>)</h3>
-                <div id="searchResults" class="trails-list"></div>
+                <div id="trailsList" class="trails-list"></div>
             </div>
         </div>
 
