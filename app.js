@@ -396,7 +396,10 @@ class TrailsApp {
                 if (!isSaved) {
                     const saveBtn = document.createElement('button');
                     saveBtn.className = 'popup-btn popup-btn-save';
-                    saveBtn.innerHTML = '<i class="fas fa-bookmark"></i> Save';
+                    const icon = document.createElement('i');
+                    icon.className = 'fas fa-bookmark';
+                    saveBtn.appendChild(icon);
+                    saveBtn.appendChild(document.createTextNode(' Save'));
                     saveBtn.addEventListener('click', () => this.saveTrail(trail.id));
                     buttonContainer.appendChild(saveBtn);
                 }
@@ -406,7 +409,10 @@ class TrailsApp {
                 osmLink.href = `https://www.openstreetmap.org/${trail.osmType || 'relation'}/${trail.id}`;
                 osmLink.target = '_blank';
                 osmLink.rel = 'noopener';
-                osmLink.innerHTML = '<i class="fas fa-map"></i> OSM';
+                const osmIcon = document.createElement('i');
+                osmIcon.className = 'fas fa-map';
+                osmLink.appendChild(osmIcon);
+                osmLink.appendChild(document.createTextNode(' OSM'));
                 buttonContainer.appendChild(osmLink);
                 
                 popupDiv.appendChild(buttonContainer);
@@ -539,7 +545,9 @@ class TrailsApp {
                 saveBtn.className = 'save-btn';
                 saveBtn.title = 'Save trail';
                 saveBtn.setAttribute('aria-label', 'Save trail');
-                saveBtn.innerHTML = '<i class="fas fa-bookmark"></i>';
+                const saveIcon = document.createElement('i');
+                saveIcon.className = 'fas fa-bookmark';
+                saveBtn.appendChild(saveIcon);
                 saveBtn.addEventListener('click', () => this.saveTrail(trail.id));
                 trailActions.appendChild(saveBtn);
             } else {
@@ -547,7 +555,9 @@ class TrailsApp {
                 removeBtn.className = 'remove-btn';
                 removeBtn.title = 'Remove trail';
                 removeBtn.setAttribute('aria-label', 'Remove trail');
-                removeBtn.innerHTML = '<i class="fas fa-trash"></i>';
+                const removeIcon = document.createElement('i');
+                removeIcon.className = 'fas fa-trash';
+                removeBtn.appendChild(removeIcon);
                 removeBtn.addEventListener('click', () => this.removeTrail(trail.id));
                 trailActions.appendChild(removeBtn);
             }
@@ -556,7 +566,9 @@ class TrailsApp {
             osmBtn.className = 'osm-btn';
             osmBtn.title = 'View on OpenStreetMap';
             osmBtn.setAttribute('aria-label', 'View on OSM');
-            osmBtn.innerHTML = '<i class="fas fa-map"></i>';
+            const osmIcon = document.createElement('i');
+            osmIcon.className = 'fas fa-map';
+            osmBtn.appendChild(osmIcon);
             osmBtn.addEventListener('click', () => {
                 window.open(`https://www.openstreetmap.org/${trail.osmType || 'relation'}/${trail.id}`, '_blank');
             });
@@ -726,18 +738,37 @@ class TrailsApp {
     }
 
     showShareDialog(url) {
-        // Create a better fallback dialog instead of using prompt()
+        // Create a better fallback dialog using DOM methods
         const toast = document.getElementById('toast');
-        toast.innerHTML = `
-            <div style="text-align: left;">
-                <strong>Share Link:</strong><br>
-                <input type="text" value="${url.replace(/"/g, '&quot;')}" 
-                       readonly 
-                       style="width: 100%; margin: 8px 0; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
-                       onclick="this.select()">
-                <small>Click the link to select, then copy it manually</small>
-            </div>
-        `;
+        
+        // Clear previous content
+        toast.textContent = '';
+        
+        const container = document.createElement('div');
+        container.style.textAlign = 'left';
+        
+        const title = document.createElement('strong');
+        title.textContent = 'Share Link:';
+        container.appendChild(title);
+        container.appendChild(document.createElement('br'));
+        
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = url;
+        input.readOnly = true;
+        input.style.width = '100%';
+        input.style.margin = '8px 0';
+        input.style.padding = '8px';
+        input.style.border = '1px solid #ccc';
+        input.style.borderRadius = '4px';
+        input.addEventListener('click', () => input.select());
+        container.appendChild(input);
+        
+        const hint = document.createElement('small');
+        hint.textContent = 'Click the link to select, then copy it manually';
+        container.appendChild(hint);
+        
+        toast.appendChild(container);
         toast.classList.add('show');
         setTimeout(() => {
             toast.classList.remove('show');
