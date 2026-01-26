@@ -978,7 +978,28 @@ class TrailsApp {
     focusTrail(trailId) {
         const trail = this.allTrails.find(t => t.id == trailId);
         
-        if (trail && trail.coordinates && trail.coordinates.length > 0) {
+        if (!trail) {
+            return;
+        }
+        
+        // If this is a parent-only route (no coordinates), focus on its children
+        if (trail.isParentOnly && trail.childRelations && trail.childRelations.length > 0) {
+            // Collect all children coordinates
+            const allCoords = [];
+            trail.childRelations.forEach(child => {
+                if (child.coordinates && child.coordinates.length > 0) {
+                    allCoords.push(...child.coordinates);
+                }
+            });
+            
+            if (allCoords.length > 0) {
+                const bounds = L.latLngBounds(allCoords);
+                this.map.fitBounds(bounds.pad(0.2));
+            }
+            return;
+        }
+        
+        if (trail.coordinates && trail.coordinates.length > 0) {
             const bounds = L.latLngBounds(trail.coordinates);
             this.map.fitBounds(bounds.pad(0.2));
             
@@ -1446,12 +1467,17 @@ class TrailsApp {
                 const promises = batch.map(async (trail) => {
                     if (processed.has(trail.id)) return null;
                     
-                    const parents = await this.fetchParentRelations(trail.id);
-                    
-                    if (parents.length > 0) {
-                        trail.parentRelations = parents;
-                        processed.add(trail.id);
-                        return { trail, parents };
+                    try {
+                        const parents = await this.fetchParentRelations(trail.id);
+                        
+                        if (parents.length > 0) {
+                            trail.parentRelations = parents;
+                            processed.add(trail.id);
+                            return { trail, parents };
+                        }
+                    } catch (error) {
+                        console.warn(`Failed to fetch parent relations for trail ${trail.id}:`, error);
+                        // Continue processing other trails even if this one fails
                     }
                     return null;
                 });
@@ -1471,16 +1497,30 @@ class TrailsApp {
                 });
             }
             
-            // Fetch parent route data if not already loaded
+            // Create parent route objects from the OSM API data (don't fetch from Overpass)
+            // This avoids 504 errors and is much faster
             for (const [parentId, children] of parentMap.entries()) {
                 const existingParent = this.allTrails.find(t => t.id === parentId);
                 
                 if (!existingParent) {
-                    // Fetch the parent route
-                    const parentTrails = await this.fetchTrailsByRefs([parentId.toString()]);
-                    if (parentTrails.length > 0) {
-                        const parentTrail = parentTrails[0];
-                        parentTrail.childRelations = children;
+                    // Create a lightweight parent object from the first child's parent info
+                    const parentInfo = children[0].parentRelations?.find(p => p.id === parentId);
+                    if (parentInfo) {
+                        const parentTrail = {
+                            id: parentId,
+                            type: 'relation',
+                            osmType: 'relation',
+                            name: parentInfo.name,
+                            description: this.getTrailDescription(parentInfo.tags),
+                            tags: parentInfo.tags,
+                            members: [],
+                            coordinates: [], // No coordinates for parent-only display
+                            wayGroups: [],
+                            distance: parentInfo.tags?.distance || null,
+                            isSuperRoute: parentInfo.isSuperRoute,
+                            childRelations: children,
+                            isParentOnly: true // Flag to indicate this is a lightweight parent
+                        };
                         this.allTrails.push(parentTrail);
                     }
                 } else {
@@ -1494,6 +1534,8 @@ class TrailsApp {
         } catch (error) {
             console.error('Error organizing trail hierarchy:', error);
             this.showLoading(false);
+            // Still update UI even if there were errors
+            this.updateTrailsUI();
         }
     }
 
@@ -1514,6 +1556,18 @@ class TrailsApp {
             parent.childRelations.forEach(child => {
                 if (!this.savedTrails.some(t => t.id === child.id)) {
                     this.savedTrails.push(child);
+                }
+                
+                // Update child trail color on map
+                const layerGroup = this.trailLayers.get(child.id);
+                if (layerGroup) {
+                    if (layerGroup.allPolylines) {
+                        layerGroup.allPolylines.forEach(polyline => {
+                            polyline.setStyle({ color: '#2c7a3f' });
+                        });
+                    } else {
+                        layerGroup.setStyle({ color: '#2c7a3f' });
+                    }
                 }
             });
         }
