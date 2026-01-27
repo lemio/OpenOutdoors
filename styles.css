@@ -46,7 +46,7 @@ body {
     border: none;
     border-radius: 0;
     background: transparent;
-    color: #2c7a3f;
+    color: #1e5a2e;
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -57,12 +57,17 @@ body {
 }
 
 .icon-btn:hover {
-    color: #1e5a2e;
+    color: #155021;
     transform: scale(1.05);
 }
 
 .icon-btn:active {
     transform: scale(0.95);
+}
+
+.icon-btn:focus-visible {
+    outline: 2px solid #2c7a3f;
+    outline-offset: 2px;
 }
 
 #searchRadius {
@@ -130,6 +135,11 @@ body {
 
 .icon-btn-small:active {
     transform: scale(0.95);
+}
+
+.icon-btn-small:focus-visible {
+    outline: 2px solid #2c7a3f;
+    outline-offset: 2px;
 }
 
 /* Trails List */
@@ -435,8 +445,8 @@ body {
         box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
         z-index: 1000;
         border-radius: 50%;
-        width: 40px;
-        height: 40px;
+        width: 45px;
+        height: 45px;
     }
 
     .map-container {
