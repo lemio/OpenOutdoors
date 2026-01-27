@@ -559,12 +559,13 @@ class TrailsApp {
                 popupDiv.appendChild(descElement);
                 popupDiv.appendChild(document.createElement('br'));
                 
-                const buttonContainer = document.createElement('div');
-                buttonContainer.style.marginTop = '8px';
-                buttonContainer.style.display = 'flex';
-                buttonContainer.style.gap = '4px';
-                
+                // Only show save button in popup, no OSM button
                 if (!isSaved) {
+                    const buttonContainer = document.createElement('div');
+                    buttonContainer.style.marginTop = '8px';
+                    buttonContainer.style.display = 'flex';
+                    buttonContainer.style.gap = '4px';
+                    
                     const saveBtn = document.createElement('button');
                     saveBtn.className = 'popup-btn popup-btn-save';
                     const icon = document.createElement('i');
@@ -573,20 +574,9 @@ class TrailsApp {
                     saveBtn.appendChild(document.createTextNode(' Save'));
                     saveBtn.addEventListener('click', () => this.saveTrail(trail.id));
                     buttonContainer.appendChild(saveBtn);
+                    
+                    popupDiv.appendChild(buttonContainer);
                 }
-                
-                const osmLink = document.createElement('a');
-                osmLink.className = 'popup-btn popup-btn-osm';
-                osmLink.href = `https://www.openstreetmap.org/${trail.osmType || 'relation'}/${trail.id}`;
-                osmLink.target = '_blank';
-                osmLink.rel = 'noopener';
-                const osmIcon = document.createElement('i');
-                osmIcon.className = 'fas fa-map';
-                osmLink.appendChild(osmIcon);
-                osmLink.appendChild(document.createTextNode(' OSM'));
-                buttonContainer.appendChild(osmLink);
-                
-                popupDiv.appendChild(buttonContainer);
                 
                 // Bind popup to the main polyline
                 if (polylineGroup.mainPolyline) {
@@ -1018,7 +1008,7 @@ class TrailsApp {
         
         trailInfo.appendChild(trailName);
         trailInfo.appendChild(trailDetails);
-        trailInfo.addEventListener('click', () => this.toggleTrailHighlight(parent.id));
+        trailInfo.addEventListener('click', () => this.toggleParentAndChildren(parent.id));
         
         // Trail actions section
         const trailActions = document.createElement('div');
@@ -1053,18 +1043,7 @@ class TrailsApp {
             trailActions.appendChild(removeBtn);
         }
         
-        const osmBtn = document.createElement('button');
-        osmBtn.className = 'osm-btn';
-        osmBtn.title = 'View on OpenStreetMap';
-        osmBtn.setAttribute('aria-label', 'View on OSM');
-        const osmIcon = document.createElement('i');
-        osmIcon.className = 'fas fa-map';
-        osmBtn.appendChild(osmIcon);
-        osmBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            window.open(`https://www.openstreetmap.org/${parent.osmType || 'relation'}/${parent.id}`, '_blank');
-        });
-        trailActions.appendChild(osmBtn);
+        // OSM button removed per requirements
         
         parentItem.appendChild(trailInfo);
         parentItem.appendChild(trailActions);
@@ -1183,18 +1162,7 @@ class TrailsApp {
             trailActions.appendChild(removeBtn);
         }
         
-        const osmBtn = document.createElement('button');
-        osmBtn.className = 'osm-btn';
-        osmBtn.title = 'View on OpenStreetMap';
-        osmBtn.setAttribute('aria-label', 'View on OSM');
-        const osmIcon = document.createElement('i');
-        osmIcon.className = 'fas fa-map';
-        osmBtn.appendChild(osmIcon);
-        osmBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            window.open(`https://www.openstreetmap.org/${trail.osmType || 'relation'}/${trail.id}`, '_blank');
-        });
-        trailActions.appendChild(osmBtn);
+        // OSM button removed per requirements
         
         trailItem.appendChild(trailInfo);
         trailItem.appendChild(trailActions);
@@ -1221,6 +1189,42 @@ class TrailsApp {
         } else {
             // Select this trail - focus is handled by selectTrail
             this.selectTrail(trailId);
+        }
+    }
+
+    toggleParentAndChildren(parentId) {
+        // Toggle parent and all its children
+        const parent = this.trailsById.get(parentId);
+        
+        if (!parent) {
+            return;
+        }
+        
+        // Check if parent is currently selected
+        const isParentSelected = this.highlightedTrailIds.has(parentId);
+        
+        if (isParentSelected) {
+            // Deselect parent and all children
+            this.deselectTrail(parentId);
+            if (parent.childRelations && parent.childRelations.length > 0) {
+                parent.childRelations.forEach(child => {
+                    if (this.highlightedTrailIds.has(child.id)) {
+                        this.deselectTrail(child.id);
+                    }
+                });
+            }
+        } else {
+            // Select parent and all children
+            this.selectTrail(parentId, false); // Don't focus on parent
+            if (parent.childRelations && parent.childRelations.length > 0) {
+                parent.childRelations.forEach(child => {
+                    if (!this.highlightedTrailIds.has(child.id)) {
+                        this.selectTrail(child.id, false); // Don't focus on each child
+                    }
+                });
+            }
+            // Focus on the parent after all selections
+            this.focusTrail(parentId);
         }
     }
 

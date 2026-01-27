@@ -145,6 +145,7 @@ body {
     cursor: pointer;
     transition: background-color 0.2s;
     touch-action: manipulation;
+    position: relative; /* For absolute positioning of save button */
 }
 
 .trail-item:hover,
@@ -218,6 +219,19 @@ body {
 }
 
 .trail-actions button.save-btn {
+    position: absolute;
+    bottom: 0.5rem;
+    right: 0.5rem;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s ease, visibility 0.2s ease;
+    z-index: 10;
+}
+
+.trail-item:hover .trail-actions button.save-btn {
+    opacity: 1;
+    visibility: visible;
+}
     background-color: #2c7a3f;
     color: white;
 }
