@@ -1438,21 +1438,41 @@ class TrailsApp {
             }
 
             const xmlText = await response.text();
+            
+            // Check if response is empty or invalid
+            if (!xmlText || xmlText.trim().length === 0) {
+                console.warn(`Empty response for relation ${relationId}`);
+                return [];
+            }
+            
             const parser = new DOMParser();
             const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
             
-            const relations = xmlDoc.getElementsByTagName('relation');
+            // Check for parsing errors
+            const parserError = xmlDoc.getElementsByTagName('parsererror');
+            if (parserError.length > 0) {
+                console.error('XML parsing error:', parserError[0].textContent);
+                return [];
+            }
+            
+            const relationElements = xmlDoc.getElementsByTagName('relation');
             const parents = [];
             
-            for (let i = 0; i < relations.length; i++) {
-                const relation = relations[i];
-                const id = relation.getAttribute('id');
+            // Check if relationElements is valid
+            if (!relationElements || relationElements.length === 0) {
+                // No parent relations found (empty OSM response is valid)
+                return [];
+            }
+            
+            for (let i = 0; i < relationElements.length; i++) {
+                const relationElement = relationElements[i];
+                const id = relationElement.getAttribute('id');
                 const tags = {};
                 
-                const tagElements = relation.getElementsByTagName('tag');
+                const tagElements = relationElement.getElementsByTagName('tag');
                 for (let j = 0; j < tagElements.length; j++) {
-                    const tag = tagElements[j];
-                    tags[tag.getAttribute('k')] = tag.getAttribute('v');
+                    const tagElement = tagElements[j];
+                    tags[tagElement.getAttribute('k')] = tagElement.getAttribute('v');
                 }
                 
                 // Only include if it's a route or superroute
