@@ -1541,8 +1541,15 @@ class TrailsApp {
                     const children = parentMap.get(parentId) || [];
                     children.forEach(child => allChildren.add(child));
                     
-                    // Get parent info from first child that has it
-                    const parentInfo = children[0]?.parentRelations?.find(p => p.id === parentId);
+                    // Get parent info from ANY child that has it (not just first)
+                    let parentInfo = null;
+                    for (const child of children) {
+                        parentInfo = child.parentRelations?.find(p => p.id === parentId);
+                        if (parentInfo) {
+                            break;
+                        }
+                    }
+                    
                     if (parentInfo) {
                         parentInfos.push({ id: parentId, info: parentInfo });
                     }
@@ -1577,16 +1584,23 @@ class TrailsApp {
                         };
                         this.allTrails.push(parentTrail);
                         this.trailsById.set(primaryParentId, parentTrail);
+                        console.log(`Created parent group: ${parentName} with ${childrenArray.length} children`);
                     } else {
                         // Update existing parent with children
                         existingParent.childRelations = childrenArray;
                         existingParent.mergedParentIds = parentIds;
+                        console.log(`Updated existing parent: ${parentName} with ${childrenArray.length} children`);
                     }
                     
                     this.parentGroupsByName.set(parentName, {
                         parentId: primaryParentId,
                         children: childrenArray
                     });
+                } else {
+                    // Log when we can't create a parent group
+                    if (allChildren.size > 0 && parentInfos.length === 0) {
+                        console.warn(`Parent "${parentName}" has children but no parent info found`);
+                    }
                 }
             }
             
