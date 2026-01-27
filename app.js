@@ -2018,6 +2018,13 @@ class VoronoiOverlay {
         this.voronoi = null;
         this.points = [];
         this.trailIds = [];
+        
+        // Listen to map events to regenerate when needed
+        this.map.on('moveend', () => {
+            if (this.visible) {
+                this.regenerate();
+            }
+        });
     }
 
     toggle() {
@@ -2122,54 +2129,91 @@ class VoronoiOverlay {
     renderOverlay() {
         if (!this.voronoi) return;
 
-        // Create SVG overlay
-        const bounds = this.map.getBounds();
-        const topLeft = this.map.latLngToLayerPoint(bounds.getNorthWest());
-        const bottomRight = this.map.latLngToLayerPoint(bounds.getSouthEast());
-        
-        const svgOverlay = L.svgOverlay(
-            `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${topLeft.x} ${topLeft.y} ${bottomRight.x - topLeft.x} ${bottomRight.y - topLeft.y}">
-                ${this.renderVoronoiCells()}
-                ${this.renderVoronoiPoints()}
-            </svg>`,
-            bounds,
-            {
-                interactive: false,
-                opacity: 0.3
+        // Create a canvas overlay using Leaflet's canvas pane
+        const CanvasOverlay = L.Layer.extend({
+            initialize: function(voronoiOverlay) {
+                this.voronoiOverlay = voronoiOverlay;
+            },
+            
+            onAdd: function(map) {
+                this._map = map;
+                
+                // Create canvas element
+                this._canvas = L.DomUtil.create('canvas', 'voronoi-overlay');
+                const size = map.getSize();
+                this._canvas.width = size.x;
+                this._canvas.height = size.y;
+                this._canvas.style.position = 'absolute';
+                this._canvas.style.top = '0';
+                this._canvas.style.left = '0';
+                this._canvas.style.pointerEvents = 'none';
+                this._canvas.style.opacity = '0.4';
+                
+                // Add canvas to map panes
+                map.getPanes().overlayPane.appendChild(this._canvas);
+                
+                // Draw Voronoi
+                this._draw();
+            },
+            
+            onRemove: function(map) {
+                if (this._canvas) {
+                    L.DomUtil.remove(this._canvas);
+                }
+            },
+            
+            _draw: function() {
+                const ctx = this._canvas.getContext('2d');
+                const voronoi = this.voronoiOverlay.voronoi;
+                const points = this.voronoiOverlay.points;
+                const trailIds = this.voronoiOverlay.trailIds;
+                const colors = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6'];
+                
+                // Clear canvas
+                ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
+                
+                // Draw Voronoi cells
+                for (let i = 0; i < points.length; i++) {
+                    const cell = voronoi.cellPolygon(i);
+                    if (!cell) continue;
+                    
+                    const trailId = trailIds[i];
+                    const colorIndex = Math.abs(trailId.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0)) % colors.length;
+                    const color = colors[colorIndex];
+                    
+                    // Draw cell
+                    ctx.beginPath();
+                    ctx.moveTo(cell[0][0], cell[0][1]);
+                    for (let j = 1; j < cell.length; j++) {
+                        ctx.lineTo(cell[j][0], cell[j][1]);
+                    }
+                    ctx.closePath();
+                    
+                    // Fill with semi-transparent color
+                    ctx.fillStyle = color;
+                    ctx.globalAlpha = 0.3;
+                    ctx.fill();
+                    
+                    // Stroke with darker color
+                    ctx.strokeStyle = '#333';
+                    ctx.globalAlpha = 0.5;
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
+                }
+                
+                // Draw points
+                ctx.globalAlpha = 0.7;
+                ctx.fillStyle = '#000';
+                for (let i = 0; i < points.length; i++) {
+                    ctx.beginPath();
+                    ctx.arc(points[i][0], points[i][1], 2, 0, 2 * Math.PI);
+                    ctx.fill();
+                }
             }
-        );
+        });
 
-        this.overlayLayer = svgOverlay.addTo(this.map);
-    }
-
-    renderVoronoiCells() {
-        let svg = '';
-        const colors = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6'];
-        
-        for (let i = 0; i < this.points.length; i++) {
-            const cell = this.voronoi.cellPolygon(i);
-            if (!cell) continue;
-
-            const trailId = this.trailIds[i];
-            const colorIndex = Math.abs(trailId.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0)) % colors.length;
-            const color = colors[colorIndex];
-
-            const pathData = `M${cell.map(p => p.join(',')).join('L')}Z`;
-            svg += `<path d="${pathData}" fill="${color}" stroke="#333" stroke-width="1" fill-opacity="0.2" />`;
-        }
-        
-        return svg;
-    }
-
-    renderVoronoiPoints() {
-        let svg = '';
-        
-        for (let i = 0; i < this.points.length; i++) {
-            const [x, y] = this.points[i];
-            svg += `<circle cx="${x}" cy="${y}" r="2" fill="#000" opacity="0.5" />`;
-        }
-        
-        return svg;
+        this.overlayLayer = new CanvasOverlay(this);
+        this.map.addLayer(this.overlayLayer);
     }
 
     findNearestTrail(clickPoint) {
