@@ -633,13 +633,36 @@ class TrailsApp {
     moveTrailToPane(trailId, pane) {
         // Move a trail's visible polylines to a different pane
         const layerGroup = this.trailLayers.get(trailId);
-        if (layerGroup && layerGroup.allPolylines) {
+        if (!layerGroup) {
+            return;
+        }
+        
+        if (layerGroup.allPolylines) {
             layerGroup.allPolylines.forEach(polyline => {
                 // Remove from current pane and add to new pane
                 this.map.removeLayer(polyline);
                 polyline.options.pane = pane;
                 polyline.addTo(this.map);
             });
+        } else {
+            // Handle single polyline case
+            this.map.removeLayer(layerGroup);
+            layerGroup.options.pane = pane;
+            layerGroup.addTo(this.map);
+        }
+    }
+
+    updateTrailColor(trailId, color) {
+        // Helper method to update trail color on map
+        const layerGroup = this.trailLayers.get(trailId);
+        if (layerGroup) {
+            if (layerGroup.allPolylines) {
+                layerGroup.allPolylines.forEach(polyline => {
+                    polyline.setStyle({ color: color });
+                });
+            } else {
+                layerGroup.setStyle({ color: color });
+            }
         }
     }
 
@@ -1254,21 +1277,13 @@ class TrailsApp {
         this.saveSavedTrails();
         
         // Update trail color on map and move to saved pane
-        const layerGroup = this.trailLayers.get(trailId);
-        if (layerGroup) {
-            // Move to saved pane unless it's selected
-            if (!this.highlightedTrailIds.has(trailId)) {
-                this.moveTrailToPane(trailId, 'savedTrailsPane');
-            }
-            
-            if (layerGroup.allPolylines) {
-                layerGroup.allPolylines.forEach(polyline => {
-                    polyline.setStyle({ color: '#2c7a3f' });
-                });
-            } else {
-                layerGroup.setStyle({ color: '#2c7a3f' });
-            }
+        // Move to saved pane unless it's selected
+        if (!this.highlightedTrailIds.has(trailId)) {
+            this.moveTrailToPane(trailId, 'savedTrailsPane');
         }
+        
+        // Update color to green for saved trails
+        this.updateTrailColor(trailId, '#2c7a3f');
         
         this.updateTrailsUI();
         this.showToast(`Saved: ${trail.name}`);
@@ -1300,17 +1315,8 @@ class TrailsApp {
             this.savedTrails.push(trail);
             savedCount++;
             
-            // Update trail color on map and move to saved pane
-            const layerGroup = this.trailLayers.get(trailId);
-            if (layerGroup) {
-                if (layerGroup.allPolylines) {
-                    layerGroup.allPolylines.forEach(polyline => {
-                        polyline.setStyle({ color: '#2c7a3f' });
-                    });
-                } else {
-                    layerGroup.setStyle({ color: '#2c7a3f' });
-                }
-            }
+            // Update trail color to green for saved trails
+            this.updateTrailColor(trailId, '#2c7a3f');
         });
 
         // Save to localStorage
