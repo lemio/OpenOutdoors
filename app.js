@@ -21,12 +21,18 @@ class TrailsApp {
         this.savedTrailIds = new Set(); // Quick saved check
         this.parentGroupsByName = new Map(); // Merge parents by name
         
+        // Voronoi overlay (initialized after map is ready)
+        this.voronoiOverlay = null;
+        
         this.init();
     }
 
     async init() {
         // Initialize map
         this.initMap();
+
+        // Initialize Voronoi overlay
+        this.voronoiOverlay = new VoronoiOverlay(this.map, this);
 
         // Setup event listeners
         this.setupEventListeners();
@@ -110,6 +116,22 @@ class TrailsApp {
                 this.toggleCollapse();
             });
         }
+
+        // Keyboard shortcuts for Voronoi overlay
+        document.addEventListener('keydown', (e) => {
+            // Q key - toggle Voronoi overlay
+            if (e.key === 'q' || e.key === 'Q') {
+                this.voronoiOverlay.toggle();
+                e.preventDefault();
+            }
+            
+            // Number keys 1-9 - set sampling level
+            if (e.key >= '1' && e.key <= '9') {
+                const level = parseInt(e.key) - 1;
+                this.voronoiOverlay.setSamplingLevel(level);
+                e.preventDefault();
+            }
+        });
     }
 
     toggleCollapse() {
@@ -600,6 +622,11 @@ class TrailsApp {
             const group = L.featureGroup(allLayers);
             this.map.fitBounds(group.getBounds().pad(0.1));
         }
+        
+        // Regenerate Voronoi overlay if visible
+        if (this.voronoiOverlay && this.voronoiOverlay.visible) {
+            this.voronoiOverlay.regenerate();
+        }
     }
 
     clearTrailLayers() {
@@ -714,7 +741,16 @@ class TrailsApp {
     }
 
     handleTrailClick(e, trailId) {
-        // Find all trails at the clicked location
+        // If Voronoi overlay is enabled, use it for precise selection
+        if (this.voronoiOverlay && this.voronoiOverlay.visible) {
+            const nearestTrailId = this.voronoiOverlay.findNearestTrail(e.latlng);
+            if (nearestTrailId) {
+                this.toggleTrailHighlight(nearestTrailId);
+                return;
+            }
+        }
+        
+        // Otherwise, use the original tolerance-based detection
         const clickPoint = e.latlng;
         const overlappingTrails = this.findTrailsAtPoint(clickPoint, 20); // 20px tolerance
         
@@ -1968,6 +2004,187 @@ class TrailsApp {
         
         const childCount = parent.childRelations ? parent.childRelations.length : 0;
         this.showToast(`Saved ${parent.name} with ${childCount} child routes`);
+    }
+}
+
+// VoronoiOverlay - Manages Voronoi diagram visualization for trail selection
+class VoronoiOverlay {
+    constructor(map, trailsApp) {
+        this.map = map;
+        this.trailsApp = trailsApp;
+        this.visible = false;
+        this.overlayLayer = null;
+        this.samplingLevel = 0; // 0 = all points, 1 = every 2nd, 2 = every 4th, etc.
+        this.voronoi = null;
+        this.points = [];
+        this.trailIds = [];
+    }
+
+    toggle() {
+        this.visible = !this.visible;
+        if (this.visible) {
+            this.show();
+        } else {
+            this.hide();
+        }
+    }
+
+    show() {
+        this.visible = true;
+        this.regenerate();
+        this.trailsApp.showToast('Voronoi overlay enabled (1-9 to adjust density)');
+    }
+
+    hide() {
+        this.visible = false;
+        if (this.overlayLayer) {
+            this.map.removeLayer(this.overlayLayer);
+            this.overlayLayer = null;
+        }
+        this.trailsApp.showToast('Voronoi overlay disabled');
+    }
+
+    setSamplingLevel(level) {
+        this.samplingLevel = level;
+        if (this.visible) {
+            this.regenerate();
+        }
+        const step = Math.pow(2, level);
+        const message = level === 0 ? 'Using all points' : `Using every ${step}${this.getOrdinalSuffix(step)} point`;
+        this.trailsApp.showToast(message);
+    }
+
+    getOrdinalSuffix(num) {
+        if (num === 2) return 'nd';
+        if (num === 4) return 'th';
+        if (num === 8) return 'th';
+        if (num === 16) return 'th';
+        return 'th';
+    }
+
+    regenerate() {
+        // Remove existing overlay
+        if (this.overlayLayer) {
+            this.map.removeLayer(this.overlayLayer);
+            this.overlayLayer = null;
+        }
+
+        // Collect all trail points
+        this.collectTrailPoints();
+
+        if (this.points.length < 3) {
+            this.trailsApp.showToast('Not enough trail points for Voronoi diagram');
+            return;
+        }
+
+        // Create Voronoi diagram
+        this.createVoronoiDiagram();
+
+        // Render overlay
+        this.renderOverlay();
+    }
+
+    collectTrailPoints() {
+        this.points = [];
+        this.trailIds = [];
+        
+        const step = Math.pow(2, this.samplingLevel);
+        
+        this.trailsApp.trailLayers.forEach((layerGroup, trailId) => {
+            const trail = this.trailsApp.allTrails.find(t => t.id === trailId);
+            if (!trail) return;
+
+            // Get coordinates from wayGroups or flat coordinates
+            const coordsArrays = trail.wayGroups && trail.wayGroups.length > 0 
+                ? trail.wayGroups 
+                : [trail.coordinates];
+
+            coordsArrays.forEach(coords => {
+                for (let i = 0; i < coords.length; i += step) {
+                    const [lat, lng] = coords[i];
+                    // Convert to pixel coordinates for Voronoi
+                    const point = this.map.latLngToContainerPoint([lat, lng]);
+                    this.points.push([point.x, point.y]);
+                    this.trailIds.push(trailId);
+                }
+            });
+        });
+    }
+
+    createVoronoiDiagram() {
+        if (this.points.length < 3) return;
+
+        const bounds = this.map.getSize();
+        const delaunay = d3Delaunay.Delaunay.from(this.points);
+        this.voronoi = delaunay.voronoi([0, 0, bounds.x, bounds.y]);
+    }
+
+    renderOverlay() {
+        if (!this.voronoi) return;
+
+        // Create SVG overlay
+        const bounds = this.map.getBounds();
+        const topLeft = this.map.latLngToLayerPoint(bounds.getNorthWest());
+        const bottomRight = this.map.latLngToLayerPoint(bounds.getSouthEast());
+        
+        const svgOverlay = L.svgOverlay(
+            `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${topLeft.x} ${topLeft.y} ${bottomRight.x - topLeft.x} ${bottomRight.y - topLeft.y}">
+                ${this.renderVoronoiCells()}
+                ${this.renderVoronoiPoints()}
+            </svg>`,
+            bounds,
+            {
+                interactive: false,
+                opacity: 0.3
+            }
+        );
+
+        this.overlayLayer = svgOverlay.addTo(this.map);
+    }
+
+    renderVoronoiCells() {
+        let svg = '';
+        const colors = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6'];
+        
+        for (let i = 0; i < this.points.length; i++) {
+            const cell = this.voronoi.cellPolygon(i);
+            if (!cell) continue;
+
+            const trailId = this.trailIds[i];
+            const colorIndex = Math.abs(trailId.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0)) % colors.length;
+            const color = colors[colorIndex];
+
+            const pathData = `M${cell.map(p => p.join(',')).join('L')}Z`;
+            svg += `<path d="${pathData}" fill="${color}" stroke="#333" stroke-width="1" fill-opacity="0.2" />`;
+        }
+        
+        return svg;
+    }
+
+    renderVoronoiPoints() {
+        let svg = '';
+        
+        for (let i = 0; i < this.points.length; i++) {
+            const [x, y] = this.points[i];
+            svg += `<circle cx="${x}" cy="${y}" r="2" fill="#000" opacity="0.5" />`;
+        }
+        
+        return svg;
+    }
+
+    findNearestTrail(clickPoint) {
+        if (!this.voronoi || this.points.length === 0) {
+            return null;
+        }
+
+        const point = this.map.latLngToContainerPoint(clickPoint);
+        const index = this.voronoi.delaunay.find(point.x, point.y);
+        
+        if (index >= 0 && index < this.trailIds.length) {
+            return this.trailIds[index];
+        }
+        
+        return null;
     }
 }
 
