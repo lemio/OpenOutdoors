@@ -119,17 +119,31 @@ class TrailsApp {
 
         // Keyboard shortcuts for Voronoi overlay
         document.addEventListener('keydown', (e) => {
+            // Ignore keyboard shortcuts when typing in input fields
+            const activeElement = document.activeElement;
+            if (activeElement && (
+                activeElement.tagName === 'INPUT' || 
+                activeElement.tagName === 'TEXTAREA' ||
+                activeElement.isContentEditable
+            )) {
+                return;
+            }
+            
             // Q key - toggle Voronoi overlay
             if (e.key === 'q' || e.key === 'Q') {
-                this.voronoiOverlay.toggle();
-                e.preventDefault();
+                if (this.voronoiOverlay) {
+                    this.voronoiOverlay.toggle();
+                    e.preventDefault();
+                }
             }
             
             // Number keys 1-9 - set sampling level
             if (e.key >= '1' && e.key <= '9') {
-                const level = parseInt(e.key) - 1;
-                this.voronoiOverlay.setSamplingLevel(level);
-                e.preventDefault();
+                if (this.voronoiOverlay) {
+                    const level = parseInt(e.key) - 1;
+                    this.voronoiOverlay.setSamplingLevel(level);
+                    e.preventDefault();
+                }
             }
         });
     }
@@ -744,7 +758,7 @@ class TrailsApp {
         // If Voronoi overlay is enabled, use it for precise selection
         if (this.voronoiOverlay && this.voronoiOverlay.visible) {
             const nearestTrailId = this.voronoiOverlay.findNearestTrail(e.latlng);
-            if (nearestTrailId) {
+            if (nearestTrailId && this.trailLayers.has(nearestTrailId)) {
                 this.toggleTrailHighlight(nearestTrailId);
                 return;
             }
@@ -2062,10 +2076,11 @@ class VoronoiOverlay {
     }
 
     getOrdinalSuffix(num) {
-        if (num === 2) return 'nd';
-        if (num === 4) return 'th';
-        if (num === 8) return 'th';
-        if (num === 16) return 'th';
+        const j = num % 10;
+        const k = num % 100;
+        if (j === 1 && k !== 11) return 'st';
+        if (j === 2 && k !== 12) return 'nd';
+        if (j === 3 && k !== 13) return 'rd';
         return 'th';
     }
 
@@ -2121,9 +2136,21 @@ class VoronoiOverlay {
     createVoronoiDiagram() {
         if (this.points.length < 3) return;
 
+        // Check if d3-delaunay is available
+        if (typeof d3Delaunay === 'undefined') {
+            console.error('d3-delaunay library not loaded');
+            this.trailsApp.showToast('Voronoi library not available');
+            return;
+        }
+
         const bounds = this.map.getSize();
-        const delaunay = d3Delaunay.Delaunay.from(this.points);
-        this.voronoi = delaunay.voronoi([0, 0, bounds.x, bounds.y]);
+        try {
+            const delaunay = d3Delaunay.Delaunay.from(this.points);
+            this.voronoi = delaunay.voronoi([0, 0, bounds.x, bounds.y]);
+        } catch (error) {
+            console.error('Error creating Voronoi diagram:', error);
+            this.trailsApp.showToast('Error creating Voronoi diagram');
+        }
     }
 
     renderOverlay() {
@@ -2167,10 +2194,19 @@ class VoronoiOverlay {
                 const voronoi = this.voronoiOverlay.voronoi;
                 const points = this.voronoiOverlay.points;
                 const trailIds = this.voronoiOverlay.trailIds;
-                const colors = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6'];
+                
+                // Expanded color palette for better trail distinction
+                const colors = [
+                    '#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6',
+                    '#e67e22', '#1abc9c', '#34495e', '#e91e63', '#00bcd4',
+                    '#ff5722', '#673ab7', '#795548', '#607d8b', '#009688'
+                ];
                 
                 // Clear canvas
                 ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
+                
+                // Save context state
+                ctx.save();
                 
                 // Draw Voronoi cells
                 for (let i = 0; i < points.length; i++) {
@@ -2209,6 +2245,9 @@ class VoronoiOverlay {
                     ctx.arc(points[i][0], points[i][1], 2, 0, 2 * Math.PI);
                     ctx.fill();
                 }
+                
+                // Restore context state
+                ctx.restore();
             }
         });
 
