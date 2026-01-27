@@ -424,12 +424,13 @@ class TrailsApp {
                 if (trail.wayGroups && trail.wayGroups.length > 0) {
                     // Create a layer group with multiple polylines, one per way
                     const polylines = trail.wayGroups.map(wayCoords => {
-                        // Create visible polyline
+                        // Create visible polyline (non-interactive to prevent event capture)
                         const visibleLine = L.polyline(wayCoords, {
                             color: isSaved ? '#2c7a3f' : '#e74c3c',
                             weight: 4,
                             opacity: 0.7,
-                            trailId: trail.id
+                            trailId: trail.id,
+                            interactive: false
                         });
                         
                         // Create transparent wider polyline for fat finger support (~20px)
@@ -451,6 +452,11 @@ class TrailsApp {
                     });
                     polylineGroup = L.layerGroup(allLayers).addTo(this.map);
                     
+                    // Ensure hit polylines are always on top for consistent event capture
+                    polylines.forEach(({ hit }) => {
+                        hit.bringToFront();
+                    });
+                    
                     // Add event handlers to hit polylines for fat finger support
                     polylines.forEach(({ visible, hit }) => {
                         hit.on('mouseover', () => {
@@ -469,12 +475,13 @@ class TrailsApp {
                     polylineGroup.allHitPolylines = polylines.map(p => p.hit);
                 } else {
                     // Fallback to single polyline
-                    // Create visible polyline
+                    // Create visible polyline (non-interactive to prevent event capture)
                     const visibleLine = L.polyline(trail.coordinates, {
                         color: isSaved ? '#2c7a3f' : '#e74c3c',
                         weight: 4,
                         opacity: 0.7,
-                        trailId: trail.id
+                        trailId: trail.id,
+                        interactive: false
                     });
                     
                     // Create transparent wider polyline for fat finger support (~20px)
@@ -487,6 +494,9 @@ class TrailsApp {
                     });
                     
                     polylineGroup = L.layerGroup([visibleLine, hitLine]).addTo(this.map);
+                    
+                    // Ensure hit polyline is always on top for consistent event capture
+                    hitLine.bringToFront();
                     
                     hitLine.on('mouseover', () => {
                         this.highlightTrail(trail.id, true);
@@ -600,7 +610,7 @@ class TrailsApp {
                             weight: 6, 
                             opacity: 1 
                         });
-                        polyline.bringToFront();
+                        // Don't call bringToFront() - keeps hit polylines on top
                     });
                 } else {
                     layerGroup.setStyle({ 
@@ -608,7 +618,7 @@ class TrailsApp {
                         weight: 6, 
                         opacity: 1 
                     });
-                    layerGroup.bringToFront();
+                    // Don't call bringToFront() - keeps hit polylines on top
                 }
             } else if (!isSelected) {
                 // Return to original color if not selected
@@ -744,7 +754,7 @@ class TrailsApp {
                         weight: 6, 
                         opacity: 1 
                     });
-                    polyline.bringToFront();
+                    // Don't call bringToFront() - keeps hit polylines on top
                 });
             } else {
                 layerGroup.setStyle({ 
@@ -752,7 +762,7 @@ class TrailsApp {
                     weight: 6, 
                     opacity: 1 
                 });
-                layerGroup.bringToFront();
+                // Don't call bringToFront() - keeps hit polylines on top
             }
         }
         const listItem = document.querySelector(`[data-trail-id="${trailId}"]`);
