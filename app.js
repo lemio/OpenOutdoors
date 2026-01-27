@@ -654,10 +654,8 @@ class TrailsApp {
                     this.selectTrail(id, false); // Don't focus for multi-select
                 }
             });
-            // Focus on the first trail in the group
-            if (overlappingTrails.length > 0) {
-                this.focusTrail(overlappingTrails[0]);
-            }
+            // Focus on the first trail in the group (length > 1 is already guaranteed)
+            this.focusTrail(overlappingTrails[0]);
         } else {
             // Single trail - toggle selection
             this.toggleTrailHighlight(trailId);
