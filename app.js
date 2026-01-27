@@ -1,6 +1,11 @@
 // OpenOutdoors - Hiking Trails Progressive Web App
 // Main Application Logic
 
+// Geographic constants
+const EARTH_CIRCUMFERENCE_METERS = 40075000;
+const TILE_SIZE = 256;
+const METERS_PER_DEGREE = 111000; // Approximate meters per degree at equator
+
 class TrailsApp {
     constructor() {
         this.map = null;
@@ -9,7 +14,7 @@ class TrailsApp {
         this.savedTrails = this.loadSavedTrails();
         this.allTrails = []; // Combined list of all trails
         this.currentLocation = null;
-        this.highlightedTrailId = null;
+        this.highlightedTrailIds = new Set(); // Changed to Set for multi-selection
         
         // Performance optimization: Cache data structures
         this.trailsById = new Map(); // Quick lookup by ID
@@ -51,6 +56,20 @@ class TrailsApp {
             maxZoom: 19,
             attribution: '© <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>'
         }).addTo(this.map);
+
+        // Create custom panes for proper trail rendering order
+        // Z-index order: searched (400) < saved (410) < selected (420) < hit (450)
+        this.map.createPane('searchedTrailsPane');
+        this.map.getPane('searchedTrailsPane').style.zIndex = 400;
+        
+        this.map.createPane('savedTrailsPane');
+        this.map.getPane('savedTrailsPane').style.zIndex = 410;
+        
+        this.map.createPane('selectedTrailsPane');
+        this.map.getPane('selectedTrailsPane').style.zIndex = 420;
+        
+        this.map.createPane('hitPane');
+        this.map.getPane('hitPane').style.zIndex = 450;
     }
 
     setupEventListeners() {
@@ -72,6 +91,11 @@ class TrailsApp {
         // Share button
         document.getElementById('shareBtn').addEventListener('click', () => {
             this.shareTrails();
+        });
+
+        // Save Selection button
+        document.getElementById('saveSelectionBtn').addEventListener('click', () => {
+            this.saveSelectedTrails();
         });
 
         // Clear button
@@ -413,55 +437,103 @@ class TrailsApp {
                 }
 
                 const isSaved = this.savedTrails.some(t => t.id === trail.id);
+                const trailPane = this.getTrailPane(trail.id);
                 
                 // Use wayGroups if available to draw separate polylines per way, otherwise use coordinates
                 let polylineGroup;
                 if (trail.wayGroups && trail.wayGroups.length > 0) {
                     // Create a layer group with multiple polylines, one per way
                     const polylines = trail.wayGroups.map(wayCoords => {
-                        return L.polyline(wayCoords, {
+                        // Create visible polyline (non-interactive to prevent event capture)
+                        const visibleLine = L.polyline(wayCoords, {
                             color: isSaved ? '#2c7a3f' : '#e74c3c',
                             weight: 4,
                             opacity: 0.7,
-                            trailId: trail.id
+                            trailId: trail.id,
+                            interactive: false,
+                            pane: trailPane
                         });
+                        
+                        // Create transparent wider polyline for fat finger support (~20px)
+                        const hitLine = L.polyline(wayCoords, {
+                            color: 'transparent',
+                            weight: 20,
+                            opacity: 0,
+                            trailId: trail.id,
+                            interactive: true,
+                            pane: 'hitPane'
+                        });
+                        
+                        return { visible: visibleLine, hit: hitLine };
                     });
-                    polylineGroup = L.layerGroup(polylines).addTo(this.map);
-                    // Add event handlers to all polylines in the group
-                    polylines.forEach(polyline => {
-                        polyline.on('mouseover', () => {
+                    
+                    // Add both visible and hit polylines to map
+                    const allLayers = [];
+                    polylines.forEach(({ visible, hit }) => {
+                        allLayers.push(visible, hit);
+                    });
+                    polylineGroup = L.layerGroup(allLayers).addTo(this.map);
+                    
+                    // Ensure hit polylines are always on top for consistent event capture
+                    polylines.forEach(({ hit }) => {
+                        hit.bringToFront();
+                    });
+                    
+                    // Add event handlers to hit polylines for fat finger support
+                    polylines.forEach(({ visible, hit }) => {
+                        hit.on('mouseover', () => {
                             this.highlightTrail(trail.id, true);
                         });
-                        polyline.on('mouseout', () => {
+                        hit.on('mouseout', () => {
                             this.highlightTrail(trail.id, false);
                         });
-                        polyline.on('click', () => {
-                            this.focusTrail(trail.id);
+                        hit.on('click', (e) => {
+                            this.handleTrailClick(e, trail.id);
                         });
                     });
                     // Use first polyline for popup
-                    polylineGroup.mainPolyline = polylines[0];
-                    polylineGroup.allPolylines = polylines;
+                    polylineGroup.mainPolyline = polylines[0].visible;
+                    polylineGroup.allPolylines = polylines.map(p => p.visible);
+                    polylineGroup.allHitPolylines = polylines.map(p => p.hit);
                 } else {
                     // Fallback to single polyline
-                    polylineGroup = L.polyline(trail.coordinates, {
+                    // Create visible polyline (non-interactive to prevent event capture)
+                    const visibleLine = L.polyline(trail.coordinates, {
                         color: isSaved ? '#2c7a3f' : '#e74c3c',
                         weight: 4,
                         opacity: 0.7,
-                        trailId: trail.id
-                    }).addTo(this.map);
+                        trailId: trail.id,
+                        interactive: false,
+                        pane: trailPane
+                    });
                     
-                    polylineGroup.on('mouseover', () => {
+                    // Create transparent wider polyline for fat finger support (~20px)
+                    const hitLine = L.polyline(trail.coordinates, {
+                        color: 'transparent',
+                        weight: 20,
+                        opacity: 0,
+                        trailId: trail.id,
+                        interactive: true,
+                        pane: 'hitPane'
+                    });
+                    
+                    polylineGroup = L.layerGroup([visibleLine, hitLine]).addTo(this.map);
+                    
+                    // Ensure hit polyline is always on top for consistent event capture
+                    hitLine.bringToFront();
+                    
+                    hitLine.on('mouseover', () => {
                         this.highlightTrail(trail.id, true);
                     });
-                    polylineGroup.on('mouseout', () => {
+                    hitLine.on('mouseout', () => {
                         this.highlightTrail(trail.id, false);
                     });
-                    polylineGroup.on('click', () => {
-                        this.focusTrail(trail.id);
+                    hitLine.on('click', (e) => {
+                        this.handleTrailClick(e, trail.id);
                     });
-                    polylineGroup.mainPolyline = polylineGroup;
-                    polylineGroup.allPolylines = [polylineGroup];
+                    polylineGroup.mainPolyline = visibleLine;
+                    polylineGroup.allPolylines = [visibleLine];
+                    polylineGroup.allHitPolylines = [hitLine];
                 }
 
                 // Create popup content safely
@@ -487,12 +559,13 @@ class TrailsApp {
                 popupDiv.appendChild(descElement);
                 popupDiv.appendChild(document.createElement('br'));
                 
-                const buttonContainer = document.createElement('div');
-                buttonContainer.style.marginTop = '8px';
-                buttonContainer.style.display = 'flex';
-                buttonContainer.style.gap = '4px';
-                
+                // Only show save button in popup, no OSM button
                 if (!isSaved) {
+                    const buttonContainer = document.createElement('div');
+                    buttonContainer.style.marginTop = '8px';
+                    buttonContainer.style.display = 'flex';
+                    buttonContainer.style.gap = '4px';
+                    
                     const saveBtn = document.createElement('button');
                     saveBtn.className = 'popup-btn popup-btn-save';
                     const icon = document.createElement('i');
@@ -501,20 +574,9 @@ class TrailsApp {
                     saveBtn.appendChild(document.createTextNode(' Save'));
                     saveBtn.addEventListener('click', () => this.saveTrail(trail.id));
                     buttonContainer.appendChild(saveBtn);
+                    
+                    popupDiv.appendChild(buttonContainer);
                 }
-                
-                const osmLink = document.createElement('a');
-                osmLink.className = 'popup-btn popup-btn-osm';
-                osmLink.href = `https://www.openstreetmap.org/${trail.osmType || 'relation'}/${trail.id}`;
-                osmLink.target = '_blank';
-                osmLink.rel = 'noopener';
-                const osmIcon = document.createElement('i');
-                osmIcon.className = 'fas fa-map';
-                osmLink.appendChild(osmIcon);
-                osmLink.appendChild(document.createTextNode(' OSM'));
-                buttonContainer.appendChild(osmLink);
-                
-                popupDiv.appendChild(buttonContainer);
                 
                 // Bind popup to the main polyline
                 if (polylineGroup.mainPolyline) {
@@ -547,28 +609,95 @@ class TrailsApp {
         this.trailLayers.clear();
     }
 
+    getTrailPane(trailId) {
+        // Determine which pane a trail should be in based on its state
+        if (this.highlightedTrailIds.has(trailId)) {
+            return 'selectedTrailsPane';
+        } else if (this.savedTrailIds.has(trailId)) {
+            return 'savedTrailsPane';
+        } else {
+            return 'searchedTrailsPane';
+        }
+    }
+
+    moveTrailToPane(trailId, pane) {
+        // Move a trail's visible polylines to a different pane
+        const layerGroup = this.trailLayers.get(trailId);
+        if (!layerGroup) {
+            return;
+        }
+        
+        if (layerGroup.allPolylines) {
+            layerGroup.allPolylines.forEach(polyline => {
+                // Remove from current pane and add to new pane
+                this.map.removeLayer(polyline);
+                polyline.options.pane = pane;
+                polyline.addTo(this.map);
+            });
+        } else {
+            // Handle single polyline case
+            this.map.removeLayer(layerGroup);
+            layerGroup.options.pane = pane;
+            layerGroup.addTo(this.map);
+        }
+    }
+
+    updateTrailColor(trailId, color) {
+        // Helper method to update trail color on map
+        const layerGroup = this.trailLayers.get(trailId);
+        if (layerGroup) {
+            if (layerGroup.allPolylines) {
+                layerGroup.allPolylines.forEach(polyline => {
+                    polyline.setStyle({ color: color });
+                });
+            } else {
+                layerGroup.setStyle({ color: color });
+            }
+        }
+    }
+
     highlightTrail(trailId, highlight) {
         // Highlight on map
         const layerGroup = this.trailLayers.get(trailId);
         if (layerGroup) {
             const isSaved = this.savedTrailIds.has(trailId);
+            const isSelected = this.highlightedTrailIds.has(trailId);
+            
             if (highlight) {
                 if (layerGroup.allPolylines) {
                     layerGroup.allPolylines.forEach(polyline => {
-                        polyline.setStyle({ weight: 6, opacity: 1 });
-                        polyline.bringToFront();
+                        polyline.setStyle({ 
+                            color: '#2196F3', // Blue for hover
+                            weight: 6, 
+                            opacity: 1 
+                        });
+                        // Don't call bringToFront() - keeps hit polylines on top
                     });
                 } else {
-                    layerGroup.setStyle({ weight: 6, opacity: 1 });
-                    layerGroup.bringToFront();
+                    layerGroup.setStyle({ 
+                        color: '#2196F3', // Blue for hover
+                        weight: 6, 
+                        opacity: 1 
+                    });
+                    // Don't call bringToFront() - keeps hit polylines on top
                 }
-            } else {
+            } else if (!isSelected) {
+                // Return to original color if not selected
+                const color = isSaved ? '#2c7a3f' : '#e74c3c'; // Green for saved, red for searched
                 if (layerGroup.allPolylines) {
                     layerGroup.allPolylines.forEach(polyline => {
-                        polyline.setStyle({ weight: 4, opacity: 0.7 });
+                        polyline.setStyle({ 
+                            color: color,
+                            weight: 4, 
+                            opacity: 0.7 
+                        });
                     });
                 } else {
-                    layerGroup.setStyle({ weight: 4, opacity: 0.7 });
+                    layerGroup.setStyle({ 
+                        color: color,
+                        weight: 4, 
+                        opacity: 0.7 
+                    });
                 }
             }
         }
@@ -584,11 +713,179 @@ class TrailsApp {
         }
     }
 
+    handleTrailClick(e, trailId) {
+        // Find all trails at the clicked location
+        const clickPoint = e.latlng;
+        const overlappingTrails = this.findTrailsAtPoint(clickPoint, 20); // 20px tolerance
+        
+        if (overlappingTrails.length > 1) {
+            // Multiple overlapping trails - select all of them
+            overlappingTrails.forEach(id => {
+                if (!this.highlightedTrailIds.has(id)) {
+                    this.selectTrail(id, false); // Don't focus for multi-select
+                }
+            });
+            // Focus on the first trail in the group (length > 1 is already guaranteed)
+            this.focusTrail(overlappingTrails[0]);
+        } else {
+            // Single trail - toggle selection
+            this.toggleTrailHighlight(trailId);
+        }
+    }
+
+    findTrailsAtPoint(point, tolerancePx = 20) {
+        const overlapping = [];
+        const toleranceMeters = tolerancePx * (EARTH_CIRCUMFERENCE_METERS / (TILE_SIZE * Math.pow(2, this.map.getZoom())));
+        
+        this.trailLayers.forEach((layerGroup, trailId) => {
+            if (layerGroup.allPolylines) {
+                for (const polyline of layerGroup.allPolylines) {
+                    if (this.isPointNearPolyline(point, polyline, toleranceMeters)) {
+                        overlapping.push(trailId);
+                        break;
+                    }
+                }
+            }
+        });
+        
+        return overlapping;
+    }
+
+    isPointNearPolyline(point, polyline, tolerance) {
+        const latlngs = polyline.getLatLngs();
+        for (let i = 0; i < latlngs.length - 1; i++) {
+            const dist = this.distanceToSegment(point, latlngs[i], latlngs[i + 1]);
+            if (dist <= tolerance) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    distanceToSegment(point, start, end) {
+        // Calculate distance from point to line segment
+        const x = point.lng;
+        const y = point.lat;
+        const x1 = start.lng;
+        const y1 = start.lat;
+        const x2 = end.lng;
+        const y2 = end.lat;
+        
+        const A = x - x1;
+        const B = y - y1;
+        const C = x2 - x1;
+        const D = y2 - y1;
+        
+        const dot = A * C + B * D;
+        const lenSq = C * C + D * D;
+        let param = -1;
+        
+        if (lenSq !== 0) {
+            param = dot / lenSq;
+        }
+        
+        let xx, yy;
+        
+        if (param < 0) {
+            xx = x1;
+            yy = y1;
+        } else if (param > 1) {
+            xx = x2;
+            yy = y2;
+        } else {
+            xx = x1 + param * C;
+            yy = y1 + param * D;
+        }
+        
+        const dx = x - xx;
+        const dy = y - yy;
+        
+        // Convert to meters (approximate)
+        return Math.sqrt(dx * dx + dy * dy) * METERS_PER_DEGREE;
+    }
+
+    selectTrail(trailId, shouldFocus = true) {
+        this.highlightedTrailIds.add(trailId);
+        
+        // Move trail to selected pane (top layer)
+        this.moveTrailToPane(trailId, 'selectedTrailsPane');
+        
+        const layerGroup = this.trailLayers.get(trailId);
+        if (layerGroup) {
+            if (layerGroup.allPolylines) {
+                layerGroup.allPolylines.forEach(polyline => {
+                    polyline.setStyle({ 
+                        color: '#2196F3', // Blue for selected
+                        weight: 6, 
+                        opacity: 1 
+                    });
+                    // Don't call bringToFront() - panes handle z-order
+                });
+            } else {
+                layerGroup.setStyle({ 
+                    color: '#2196F3',
+                    weight: 6, 
+                    opacity: 1 
+                });
+                // Don't call bringToFront() - panes handle z-order
+            }
+        }
+        const listItem = document.querySelector(`[data-trail-id="${trailId}"]`);
+        if (listItem) {
+            listItem.classList.add('selected');
+        }
+        
+        // Only focus if requested (to avoid multiple focus calls during multi-select)
+        if (shouldFocus) {
+            this.focusTrail(trailId);
+        }
+    }
+
+    deselectTrail(trailId) {
+        this.highlightedTrailIds.delete(trailId);
+        
+        const layerGroup = this.trailLayers.get(trailId);
+        if (layerGroup) {
+            const isSaved = this.savedTrailIds.has(trailId);
+            const color = isSaved ? '#2c7a3f' : '#e74c3c';
+            
+            // Move trail to appropriate pane based on saved status
+            const pane = isSaved ? 'savedTrailsPane' : 'searchedTrailsPane';
+            this.moveTrailToPane(trailId, pane);
+            
+            if (layerGroup.allPolylines) {
+                layerGroup.allPolylines.forEach(polyline => {
+                    polyline.setStyle({ 
+                        color: color,
+                        weight: 4, 
+                        opacity: 0.7 
+                    });
+                });
+            } else {
+                layerGroup.setStyle({ 
+                    color: color,
+                    weight: 4, 
+                    opacity: 0.7 
+                });
+            }
+        }
+        const listItem = document.querySelector(`[data-trail-id="${trailId}"]`);
+        if (listItem) {
+            listItem.classList.remove('selected');
+        }
+    }
+
     updateTrailsUI() {
         const trailsContainer = document.getElementById('trailsList');
         const trailsCount = document.getElementById('trailsCount');
         
         trailsCount.textContent = this.allTrails.length;
+
+        // Update Save Selection button visibility
+        const saveSelectionBtn = document.getElementById('saveSelectionBtn');
+        if (saveSelectionBtn) {
+            saveSelectionBtn.style.display = this.highlightedTrailIds.size > 0 ? 'inline-flex' : 'none';
+        }
 
         if (this.allTrails.length === 0) {
             trailsContainer.innerHTML = '<div class="empty-state">No trails found. Use the search button to find trails in the current map view.</div>';
@@ -711,7 +1008,7 @@ class TrailsApp {
         
         trailInfo.appendChild(trailName);
         trailInfo.appendChild(trailDetails);
-        trailInfo.addEventListener('click', () => this.toggleTrailHighlight(parent.id));
+        trailInfo.addEventListener('click', () => this.toggleParentAndChildren(parent.id));
         
         // Trail actions section
         const trailActions = document.createElement('div');
@@ -746,18 +1043,7 @@ class TrailsApp {
             trailActions.appendChild(removeBtn);
         }
         
-        const osmBtn = document.createElement('button');
-        osmBtn.className = 'osm-btn';
-        osmBtn.title = 'View on OpenStreetMap';
-        osmBtn.setAttribute('aria-label', 'View on OSM');
-        const osmIcon = document.createElement('i');
-        osmIcon.className = 'fas fa-map';
-        osmBtn.appendChild(osmIcon);
-        osmBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            window.open(`https://www.openstreetmap.org/${parent.osmType || 'relation'}/${parent.id}`, '_blank');
-        });
-        trailActions.appendChild(osmBtn);
+        // OSM button removed per requirements
         
         parentItem.appendChild(trailInfo);
         parentItem.appendChild(trailActions);
@@ -876,18 +1162,7 @@ class TrailsApp {
             trailActions.appendChild(removeBtn);
         }
         
-        const osmBtn = document.createElement('button');
-        osmBtn.className = 'osm-btn';
-        osmBtn.title = 'View on OpenStreetMap';
-        osmBtn.setAttribute('aria-label', 'View on OSM');
-        const osmIcon = document.createElement('i');
-        osmIcon.className = 'fas fa-map';
-        osmBtn.appendChild(osmIcon);
-        osmBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            window.open(`https://www.openstreetmap.org/${trail.osmType || 'relation'}/${trail.id}`, '_blank');
-        });
-        trailActions.appendChild(osmBtn);
+        // OSM button removed per requirements
         
         trailItem.appendChild(trailInfo);
         trailItem.appendChild(trailActions);
@@ -908,91 +1183,48 @@ class TrailsApp {
 
     toggleTrailHighlight(trailId) {
         // Toggle highlighting
-        if (this.highlightedTrailId === trailId) {
-            // Un-highlight
-            this.highlightedTrailId = null;
-            const layerGroup = this.trailLayers.get(trailId);
-            if (layerGroup) {
-                const isSaved = this.savedTrailIds.has(trailId);
-                const color = isSaved ? '#2c7a3f' : '#e74c3c';
-                if (layerGroup.allPolylines) {
-                    layerGroup.allPolylines.forEach(polyline => {
-                        polyline.setStyle({ 
-                            color: color,
-                            weight: 4, 
-                            opacity: 0.7 
-                        });
-                    });
-                } else {
-                    layerGroup.setStyle({ 
-                        color: color,
-                        weight: 4, 
-                        opacity: 0.7 
-                    });
-                }
-            }
-            const listItem = document.querySelector(`[data-trail-id="${trailId}"]`);
-            if (listItem) {
-                listItem.classList.remove('selected');
+        if (this.highlightedTrailIds.has(trailId)) {
+            // Deselect this trail
+            this.deselectTrail(trailId);
+        } else {
+            // Select this trail - focus is handled by selectTrail
+            this.selectTrail(trailId);
+        }
+    }
+
+    toggleParentAndChildren(parentId) {
+        // Toggle parent and all its children
+        const parent = this.trailsById.get(parentId);
+        
+        if (!parent) {
+            return;
+        }
+        
+        // Check if parent is currently selected
+        const isParentSelected = this.highlightedTrailIds.has(parentId);
+        
+        if (isParentSelected) {
+            // Deselect parent and all children
+            this.deselectTrail(parentId);
+            if (parent.childRelations && parent.childRelations.length > 0) {
+                parent.childRelations.forEach(child => {
+                    if (this.highlightedTrailIds.has(child.id)) {
+                        this.deselectTrail(child.id);
+                    }
+                });
             }
         } else {
-            // Un-highlight previous trail
-            if (this.highlightedTrailId) {
-                const prevLayerGroup = this.trailLayers.get(this.highlightedTrailId);
-                if (prevLayerGroup) {
-                    const isSaved = this.savedTrailIds.has(this.highlightedTrailId);
-                    const color = isSaved ? '#2c7a3f' : '#e74c3c';
-                    if (prevLayerGroup.allPolylines) {
-                        prevLayerGroup.allPolylines.forEach(polyline => {
-                            polyline.setStyle({ 
-                                color: color,
-                                weight: 4, 
-                                opacity: 0.7 
-                            });
-                        });
-                    } else {
-                        prevLayerGroup.setStyle({ 
-                            color: color,
-                            weight: 4, 
-                            opacity: 0.7 
-                        });
+            // Select parent and all children
+            this.selectTrail(parentId, false); // Don't focus on parent
+            if (parent.childRelations && parent.childRelations.length > 0) {
+                parent.childRelations.forEach(child => {
+                    if (!this.highlightedTrailIds.has(child.id)) {
+                        this.selectTrail(child.id, false); // Don't focus on each child
                     }
-                }
-                const prevListItem = document.querySelector(`[data-trail-id="${this.highlightedTrailId}"]`);
-                if (prevListItem) {
-                    prevListItem.classList.remove('selected');
-                }
+                });
             }
-            
-            // Highlight new trail
-            this.highlightedTrailId = trailId;
-            const layerGroup = this.trailLayers.get(trailId);
-            if (layerGroup) {
-                if (layerGroup.allPolylines) {
-                    layerGroup.allPolylines.forEach(polyline => {
-                        polyline.setStyle({ 
-                            color: '#2196F3', // Blue color
-                            weight: 6, 
-                            opacity: 1 
-                        });
-                        polyline.bringToFront();
-                    });
-                } else {
-                    layerGroup.setStyle({ 
-                        color: '#2196F3', // Blue color
-                        weight: 6, 
-                        opacity: 1 
-                    });
-                    layerGroup.bringToFront();
-                }
-            }
-            const listItem = document.querySelector(`[data-trail-id="${trailId}"]`);
-            if (listItem) {
-                listItem.classList.add('selected');
-            }
-            
-            // Focus on the trail
-            this.focusTrail(trailId);
+            // Focus on the parent after all selections
+            this.focusTrail(parentId);
         }
     }
 
@@ -1048,20 +1280,70 @@ class TrailsApp {
         this.savedTrails.push(trail);
         this.saveSavedTrails();
         
-        // Update trail color on map
-        const layerGroup = this.trailLayers.get(trailId);
-        if (layerGroup) {
-            if (layerGroup.allPolylines) {
-                layerGroup.allPolylines.forEach(polyline => {
-                    polyline.setStyle({ color: '#2c7a3f' });
-                });
-            } else {
-                layerGroup.setStyle({ color: '#2c7a3f' });
-            }
+        // Update trail color on map and move to saved pane
+        // Move to saved pane unless it's selected
+        if (!this.highlightedTrailIds.has(trailId)) {
+            this.moveTrailToPane(trailId, 'savedTrailsPane');
         }
+        
+        // Update color to green for saved trails
+        this.updateTrailColor(trailId, '#2c7a3f');
         
         this.updateTrailsUI();
         this.showToast(`Saved: ${trail.name}`);
+    }
+
+    saveSelectedTrails() {
+        if (this.highlightedTrailIds.size === 0) {
+            this.showToast('No trails selected');
+            return;
+        }
+
+        let savedCount = 0;
+        let alreadySavedCount = 0;
+
+        // Save all selected trails
+        this.highlightedTrailIds.forEach(trailId => {
+            const trail = this.trailsById.get(trailId);
+            
+            if (!trail) {
+                return;
+            }
+
+            // Check if already saved
+            if (this.savedTrailIds.has(trail.id)) {
+                alreadySavedCount++;
+                return;
+            }
+
+            this.savedTrails.push(trail);
+            savedCount++;
+            
+            // Update trail color to green for saved trails
+            this.updateTrailColor(trailId, '#2c7a3f');
+        });
+
+        // Save to localStorage
+        if (savedCount > 0) {
+            this.saveSavedTrails();
+        }
+
+        // Clear selection after saving
+        const selectedIds = Array.from(this.highlightedTrailIds);
+        selectedIds.forEach(trailId => {
+            this.deselectTrail(trailId);
+        });
+
+        this.updateTrailsUI();
+
+        // Show appropriate toast message
+        if (savedCount > 0 && alreadySavedCount > 0) {
+            this.showToast(`Saved ${savedCount} trail(s). ${alreadySavedCount} already saved.`);
+        } else if (savedCount > 0) {
+            this.showToast(`Saved ${savedCount} trail(s)`);
+        } else {
+            this.showToast('All selected trails were already saved');
+        }
     }
 
     removeTrail(trailId) {
