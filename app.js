@@ -1,6 +1,11 @@
 // OpenOutdoors - Hiking Trails Progressive Web App
 // Main Application Logic
 
+// Geographic constants
+const EARTH_CIRCUMFERENCE_METERS = 40075000;
+const TILE_SIZE = 256;
+const METERS_PER_DEGREE = 111000; // Approximate meters per degree at equator
+
 class TrailsApp {
     constructor() {
         this.map = null;
@@ -646,9 +651,13 @@ class TrailsApp {
             // Multiple overlapping trails - select all of them
             overlappingTrails.forEach(id => {
                 if (!this.highlightedTrailIds.has(id)) {
-                    this.selectTrail(id);
+                    this.selectTrail(id, false); // Don't focus for multi-select
                 }
             });
+            // Focus on the first trail in the group
+            if (overlappingTrails.length > 0) {
+                this.focusTrail(overlappingTrails[0]);
+            }
         } else {
             // Single trail - toggle selection
             this.toggleTrailHighlight(trailId);
@@ -657,7 +666,7 @@ class TrailsApp {
 
     findTrailsAtPoint(point, tolerancePx = 20) {
         const overlapping = [];
-        const toleranceMeters = tolerancePx * (40075000 / (256 * Math.pow(2, this.map.getZoom())));
+        const toleranceMeters = tolerancePx * (EARTH_CIRCUMFERENCE_METERS / (TILE_SIZE * Math.pow(2, this.map.getZoom())));
         
         this.trailLayers.forEach((layerGroup, trailId) => {
             if (layerGroup.allPolylines) {
@@ -723,11 +732,10 @@ class TrailsApp {
         const dy = y - yy;
         
         // Convert to meters (approximate)
-        const metersPerDegree = 111000;
-        return Math.sqrt(dx * dx + dy * dy) * metersPerDegree;
+        return Math.sqrt(dx * dx + dy * dy) * METERS_PER_DEGREE;
     }
 
-    selectTrail(trailId) {
+    selectTrail(trailId, shouldFocus = true) {
         this.highlightedTrailIds.add(trailId);
         const layerGroup = this.trailLayers.get(trailId);
         if (layerGroup) {
@@ -752,6 +760,11 @@ class TrailsApp {
         const listItem = document.querySelector(`[data-trail-id="${trailId}"]`);
         if (listItem) {
             listItem.classList.add('selected');
+        }
+        
+        // Only focus if requested (to avoid multiple focus calls during multi-select)
+        if (shouldFocus) {
+            this.focusTrail(trailId);
         }
     }
 
@@ -1111,11 +1124,8 @@ class TrailsApp {
             // Deselect this trail
             this.deselectTrail(trailId);
         } else {
-            // Select this trail (allow multiple selections)
+            // Select this trail - focus is handled by selectTrail
             this.selectTrail(trailId);
-            
-            // Focus on the trail
-            this.focusTrail(trailId);
         }
     }
 
