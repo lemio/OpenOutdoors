@@ -226,14 +226,13 @@ body {
     visibility: hidden;
     transition: opacity 0.2s ease, visibility 0.2s ease;
     z-index: 10;
+    background-color: #2c7a3f;
+    color: white;
 }
 
 .trail-item:hover .trail-actions button.save-btn {
     opacity: 1;
     visibility: visible;
-}
-    background-color: #2c7a3f;
-    color: white;
 }
 
 .trail-actions button.save-btn:hover {
