@@ -330,7 +330,8 @@ class TrailsApp {
                     coordinates: [],
                     wayGroups: [], // Array of coordinate arrays, one per way
                     distance: element.tags?.distance || null,
-                    isSuperRoute: element.tags?.type === 'superroute'
+                    isSuperRoute: element.tags?.type === 'superroute',
+                    isNetwork: element.tags?.type === 'network'
                 };
 
                 // Collect coordinates from member ways - keep them separated by way
@@ -649,7 +650,7 @@ class TrailsApp {
         const parentItem = document.createElement('div');
         parentItem.className = 'trail-item parent-trail';
         parentItem.setAttribute('data-trail-id', parent.id);
-        if (parent.isSuperRoute) {
+        if (parent.isSuperRoute || parent.isNetwork) {
             parentItem.style.backgroundColor = '#f0f8ff';
         }
         
@@ -685,6 +686,15 @@ class TrailsApp {
             superIcon.style.marginLeft = '0.3rem';
             superIcon.style.color = '#9c27b0';
             trailName.appendChild(superIcon);
+        }
+        
+        if (parent.isNetwork) {
+            const networkIcon = document.createElement('i');
+            networkIcon.className = 'fas fa-project-diagram';
+            networkIcon.style.fontSize = '0.8em';
+            networkIcon.style.marginLeft = '0.3rem';
+            networkIcon.style.color = '#2196F3';
+            trailName.appendChild(networkIcon);
         }
         
         const trailDetails = document.createElement('div');
@@ -1475,13 +1485,14 @@ class TrailsApp {
                     tags[tagElement.getAttribute('k')] = tagElement.getAttribute('v');
                 }
                 
-                // Only include if it's a route or superroute
-                if (tags.type === 'route' || tags.type === 'superroute') {
+                // Only include if it's a route, superroute, or network
+                if (tags.type === 'route' || tags.type === 'superroute' || tags.type === 'network') {
                     parents.push({
                         id: parseInt(id),
                         tags: tags,
                         name: tags.name || tags.ref || `Relation ${id}`,
-                        isSuperRoute: tags.type === 'superroute'
+                        isSuperRoute: tags.type === 'superroute',
+                        isNetwork: tags.type === 'network'
                     });
                 }
             }
@@ -1598,6 +1609,7 @@ class TrailsApp {
                             wayGroups: [],
                             distance: primaryParentInfo.tags?.distance || null,
                             isSuperRoute: primaryParentInfo.isSuperRoute,
+                            isNetwork: primaryParentInfo.isNetwork,
                             childRelations: childrenArray,
                             isParentOnly: true, // Flag to indicate this is a lightweight parent
                             mergedParentIds: parentIds // Track all merged parent IDs
