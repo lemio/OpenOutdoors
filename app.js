@@ -2141,7 +2141,7 @@ class VoronoiOverlay {
         if (this.points.length < 3) return;
 
         // Check if d3-delaunay is available
-        if (typeof d3Delaunay === 'undefined') {
+        if (typeof d3 === 'undefined' || typeof d3.Delaunay === 'undefined') {
             console.error('d3-delaunay library not loaded');
             this.trailsApp.showToast('Voronoi library not available');
             return;
@@ -2149,7 +2149,7 @@ class VoronoiOverlay {
 
         const bounds = this.map.getSize();
         try {
-            const delaunay = d3Delaunay.Delaunay.from(this.points);
+            const delaunay = d3.Delaunay.from(this.points);
             this.voronoi = delaunay.voronoi([0, 0, bounds.x, bounds.y]);
         } catch (error) {
             console.error('Error creating Voronoi diagram:', error);
