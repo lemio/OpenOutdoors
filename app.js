@@ -64,7 +64,7 @@ class TrailsApp {
         }).addTo(this.map);
 
         // Create custom panes for proper trail rendering order
-        // Z-index order: searched (400) < saved (410) < selected (420) < hit (450)
+        // Z-index order: searched (400) < saved (410) < selected (420) < hit (450) < voronoi (600)
         this.map.createPane('searchedTrailsPane');
         this.map.getPane('searchedTrailsPane').style.zIndex = 400;
         
@@ -76,6 +76,10 @@ class TrailsApp {
         
         this.map.createPane('hitPane');
         this.map.getPane('hitPane').style.zIndex = 450;
+        
+        this.map.createPane('voronoiPane');
+        this.map.getPane('voronoiPane').style.zIndex = 600;
+        this.map.getPane('voronoiPane').style.pointerEvents = 'none';
     }
 
     setupEventListeners() {
@@ -2174,10 +2178,11 @@ class VoronoiOverlay {
                 this._canvas.style.top = '0';
                 this._canvas.style.left = '0';
                 this._canvas.style.pointerEvents = 'none';
-                this._canvas.style.opacity = '0.4';
+                this._canvas.style.opacity = '0.3';
+                this._canvas.style.zIndex = '600';
                 
-                // Add canvas to map panes
-                map.getPanes().overlayPane.appendChild(this._canvas);
+                // Add canvas to voronoi pane for proper layering
+                map.getPanes().voronoiPane.appendChild(this._canvas);
                 
                 // Draw Voronoi
                 this._draw();
