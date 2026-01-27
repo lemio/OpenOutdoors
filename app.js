@@ -661,9 +661,9 @@ class TrailsApp {
         const trailName = document.createElement('div');
         trailName.className = 'trail-name';
         
-        // Add collapse/expand icon
+        // Add collapse/expand icon (collapsed by default)
         const expandIcon = document.createElement('i');
-        expandIcon.className = 'fas fa-chevron-down';
+        expandIcon.className = 'fas fa-chevron-right';
         expandIcon.style.marginRight = '0.5rem';
         expandIcon.style.cursor = 'pointer';
         trailName.appendChild(expandIcon);
@@ -763,12 +763,13 @@ class TrailsApp {
         parentItem.appendChild(trailActions);
         parentContainer.appendChild(parentItem);
         
-        // Children container (collapsible)
+        // Children container (collapsible, collapsed by default)
         const childrenContainer = document.createElement('div');
         childrenContainer.className = 'children-container';
         childrenContainer.style.marginLeft = '1.5rem';
         childrenContainer.style.borderLeft = '2px solid #9c27b0';
         childrenContainer.style.paddingLeft = '0.5rem';
+        childrenContainer.style.display = 'none'; // Collapsed by default
         
         parent.childRelations.forEach(child => {
             this.createTrailElement(child, childrenContainer, true);
@@ -1507,6 +1508,7 @@ class TrailsApp {
     async organizeTrailHierarchy(trails) {
         try {
             this.showLoading(true);
+            this.showToast('Fetching parent routes...');
             
             // Track which trails have been processed to avoid loops
             const processed = new Set();
