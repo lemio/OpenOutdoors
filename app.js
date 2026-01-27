@@ -419,49 +419,82 @@ class TrailsApp {
                 if (trail.wayGroups && trail.wayGroups.length > 0) {
                     // Create a layer group with multiple polylines, one per way
                     const polylines = trail.wayGroups.map(wayCoords => {
-                        return L.polyline(wayCoords, {
+                        // Create visible polyline
+                        const visibleLine = L.polyline(wayCoords, {
                             color: isSaved ? '#2c7a3f' : '#e74c3c',
                             weight: 4,
                             opacity: 0.7,
                             trailId: trail.id
                         });
+                        
+                        // Create transparent wider polyline for fat finger support (~20px)
+                        const hitLine = L.polyline(wayCoords, {
+                            color: 'transparent',
+                            weight: 20,
+                            opacity: 0,
+                            trailId: trail.id,
+                            interactive: true
+                        });
+                        
+                        return { visible: visibleLine, hit: hitLine };
                     });
-                    polylineGroup = L.layerGroup(polylines).addTo(this.map);
-                    // Add event handlers to all polylines in the group
-                    polylines.forEach(polyline => {
-                        polyline.on('mouseover', () => {
+                    
+                    // Add both visible and hit polylines to map
+                    const allLayers = [];
+                    polylines.forEach(({ visible, hit }) => {
+                        allLayers.push(visible, hit);
+                    });
+                    polylineGroup = L.layerGroup(allLayers).addTo(this.map);
+                    
+                    // Add event handlers to hit polylines for fat finger support
+                    polylines.forEach(({ visible, hit }) => {
+                        hit.on('mouseover', () => {
                             this.highlightTrail(trail.id, true);
                         });
-                        polyline.on('mouseout', () => {
+                        hit.on('mouseout', () => {
                             this.highlightTrail(trail.id, false);
                         });
-                        polyline.on('click', () => {
-                            this.focusTrail(trail.id);
+                        hit.on('click', () => {
+                            this.toggleTrailHighlight(trail.id);
                         });
                     });
                     // Use first polyline for popup
-                    polylineGroup.mainPolyline = polylines[0];
-                    polylineGroup.allPolylines = polylines;
+                    polylineGroup.mainPolyline = polylines[0].visible;
+                    polylineGroup.allPolylines = polylines.map(p => p.visible);
+                    polylineGroup.allHitPolylines = polylines.map(p => p.hit);
                 } else {
                     // Fallback to single polyline
-                    polylineGroup = L.polyline(trail.coordinates, {
+                    // Create visible polyline
+                    const visibleLine = L.polyline(trail.coordinates, {
                         color: isSaved ? '#2c7a3f' : '#e74c3c',
                         weight: 4,
                         opacity: 0.7,
                         trailId: trail.id
-                    }).addTo(this.map);
+                    });
                     
-                    polylineGroup.on('mouseover', () => {
+                    // Create transparent wider polyline for fat finger support (~20px)
+                    const hitLine = L.polyline(trail.coordinates, {
+                        color: 'transparent',
+                        weight: 20,
+                        opacity: 0,
+                        trailId: trail.id,
+                        interactive: true
+                    });
+                    
+                    polylineGroup = L.layerGroup([visibleLine, hitLine]).addTo(this.map);
+                    
+                    hitLine.on('mouseover', () => {
                         this.highlightTrail(trail.id, true);
                     });
-                    polylineGroup.on('mouseout', () => {
+                    hitLine.on('mouseout', () => {
                         this.highlightTrail(trail.id, false);
                     });
-                    polylineGroup.on('click', () => {
-                        this.focusTrail(trail.id);
+                    hitLine.on('click', () => {
+                        this.toggleTrailHighlight(trail.id);
                     });
-                    polylineGroup.mainPolyline = polylineGroup;
-                    polylineGroup.allPolylines = [polylineGroup];
+                    polylineGroup.mainPolyline = visibleLine;
+                    polylineGroup.allPolylines = [visibleLine];
+                    polylineGroup.allHitPolylines = [hitLine];
                 }
 
                 // Create popup content safely
@@ -552,23 +585,43 @@ class TrailsApp {
         const layerGroup = this.trailLayers.get(trailId);
         if (layerGroup) {
             const isSaved = this.savedTrailIds.has(trailId);
+            const isSelected = this.highlightedTrailId === trailId;
+            
             if (highlight) {
                 if (layerGroup.allPolylines) {
                     layerGroup.allPolylines.forEach(polyline => {
-                        polyline.setStyle({ weight: 6, opacity: 1 });
+                        polyline.setStyle({ 
+                            color: '#2196F3', // Blue for hover
+                            weight: 6, 
+                            opacity: 1 
+                        });
                         polyline.bringToFront();
                     });
                 } else {
-                    layerGroup.setStyle({ weight: 6, opacity: 1 });
+                    layerGroup.setStyle({ 
+                        color: '#2196F3', // Blue for hover
+                        weight: 6, 
+                        opacity: 1 
+                    });
                     layerGroup.bringToFront();
                 }
-            } else {
+            } else if (!isSelected) {
+                // Return to original color if not selected
+                const color = isSaved ? '#2c7a3f' : '#e74c3c'; // Green for saved, red for searched
                 if (layerGroup.allPolylines) {
                     layerGroup.allPolylines.forEach(polyline => {
-                        polyline.setStyle({ weight: 4, opacity: 0.7 });
+                        polyline.setStyle({ 
+                            color: color,
+                            weight: 4, 
+                            opacity: 0.7 
+                        });
                     });
                 } else {
-                    layerGroup.setStyle({ weight: 4, opacity: 0.7 });
+                    layerGroup.setStyle({ 
+                        color: color,
+                        weight: 4, 
+                        opacity: 0.7 
+                    });
                 }
             }
         }
