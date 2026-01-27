@@ -9,6 +9,7 @@ body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
     background-color: #f5f5f5;
     color: #333;
+    overflow: hidden; /* Prevent body scrolling */
 }
 
 .app-container {
@@ -151,6 +152,11 @@ body {
     background-color: #e8f5e9;
 }
 
+.trail-item.selected {
+    background-color: #bbdefb;
+    border-left: 4px solid #2196F3;
+}
+
 .trail-item:active {
     background-color: #c8e6c9;
 }
@@ -236,6 +242,39 @@ body {
 
 .trail-actions button.osm-btn:hover {
     background-color: #6aa85c;
+}
+
+.trail-actions button.parent-btn {
+    background-color: #9c27b0;
+    color: white;
+}
+
+.trail-actions button.parent-btn:hover {
+    background-color: #7b1fa2;
+}
+
+.trail-actions button.parent-btn:disabled {
+    background-color: #ce93d8;
+    cursor: not-allowed;
+}
+
+/* Parent trail styling */
+.parent-trail-container {
+    margin-bottom: 0.5rem;
+}
+
+.parent-trail {
+    background-color: #f8f9fa;
+    font-weight: 500;
+}
+
+.child-trail {
+    background-color: #ffffff;
+    margin-bottom: 0.25rem;
+}
+
+.children-container {
+    margin-top: 0.5rem;
 }
 
 /* Map Container */
@@ -351,6 +390,15 @@ body {
     .control-panel {
         width: 100%;
         max-height: 40vh;
+        transition: max-height 0.3s ease;
+    }
+
+    .control-panel.collapsed {
+        max-height: 50px; /* Only show toolbar when collapsed */
+    }
+
+    .control-panel.collapsed .trails-section {
+        display: none;
     }
 
     .map-container {
@@ -361,6 +409,15 @@ body {
     .toolbar {
         flex-wrap: wrap;
     }
+
+    .mobile-only {
+        display: inline-flex !important;
+    }
+}
+
+/* Hide mobile-only elements on desktop */
+.mobile-only {
+    display: none;
 }
 
 /* Touch-friendly sizes for mobile - applies when hover is not available (touchscreens) */
