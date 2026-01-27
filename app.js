@@ -56,6 +56,20 @@ class TrailsApp {
             maxZoom: 19,
             attribution: '© <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>'
         }).addTo(this.map);
+
+        // Create custom panes for proper trail rendering order
+        // Z-index order: searched (400) < saved (410) < selected (420) < hit (450)
+        this.map.createPane('searchedTrailsPane');
+        this.map.getPane('searchedTrailsPane').style.zIndex = 400;
+        
+        this.map.createPane('savedTrailsPane');
+        this.map.getPane('savedTrailsPane').style.zIndex = 410;
+        
+        this.map.createPane('selectedTrailsPane');
+        this.map.getPane('selectedTrailsPane').style.zIndex = 420;
+        
+        this.map.createPane('hitPane');
+        this.map.getPane('hitPane').style.zIndex = 450;
     }
 
     setupEventListeners() {
@@ -77,6 +91,11 @@ class TrailsApp {
         // Share button
         document.getElementById('shareBtn').addEventListener('click', () => {
             this.shareTrails();
+        });
+
+        // Save Selection button
+        document.getElementById('saveSelectionBtn').addEventListener('click', () => {
+            this.saveSelectedTrails();
         });
 
         // Clear button
@@ -418,6 +437,7 @@ class TrailsApp {
                 }
 
                 const isSaved = this.savedTrails.some(t => t.id === trail.id);
+                const trailPane = this.getTrailPane(trail.id);
                 
                 // Use wayGroups if available to draw separate polylines per way, otherwise use coordinates
                 let polylineGroup;
@@ -430,7 +450,8 @@ class TrailsApp {
                             weight: 4,
                             opacity: 0.7,
                             trailId: trail.id,
-                            interactive: false
+                            interactive: false,
+                            pane: trailPane
                         });
                         
                         // Create transparent wider polyline for fat finger support (~20px)
@@ -439,7 +460,8 @@ class TrailsApp {
                             weight: 20,
                             opacity: 0,
                             trailId: trail.id,
-                            interactive: true
+                            interactive: true,
+                            pane: 'hitPane'
                         });
                         
                         return { visible: visibleLine, hit: hitLine };
@@ -481,7 +503,8 @@ class TrailsApp {
                         weight: 4,
                         opacity: 0.7,
                         trailId: trail.id,
-                        interactive: false
+                        interactive: false,
+                        pane: trailPane
                     });
                     
                     // Create transparent wider polyline for fat finger support (~20px)
@@ -490,7 +513,8 @@ class TrailsApp {
                         weight: 20,
                         opacity: 0,
                         trailId: trail.id,
-                        interactive: true
+                        interactive: true,
+                        pane: 'hitPane'
                     });
                     
                     polylineGroup = L.layerGroup([visibleLine, hitLine]).addTo(this.map);
@@ -593,6 +617,30 @@ class TrailsApp {
             this.map.removeLayer(layer);
         });
         this.trailLayers.clear();
+    }
+
+    getTrailPane(trailId) {
+        // Determine which pane a trail should be in based on its state
+        if (this.highlightedTrailIds.has(trailId)) {
+            return 'selectedTrailsPane';
+        } else if (this.savedTrailIds.has(trailId)) {
+            return 'savedTrailsPane';
+        } else {
+            return 'searchedTrailsPane';
+        }
+    }
+
+    moveTrailToPane(trailId, pane) {
+        // Move a trail's visible polylines to a different pane
+        const layerGroup = this.trailLayers.get(trailId);
+        if (layerGroup && layerGroup.allPolylines) {
+            layerGroup.allPolylines.forEach(polyline => {
+                // Remove from current pane and add to new pane
+                this.map.removeLayer(polyline);
+                polyline.options.pane = pane;
+                polyline.addTo(this.map);
+            });
+        }
     }
 
     highlightTrail(trailId, highlight) {
@@ -745,6 +793,10 @@ class TrailsApp {
 
     selectTrail(trailId, shouldFocus = true) {
         this.highlightedTrailIds.add(trailId);
+        
+        // Move trail to selected pane (top layer)
+        this.moveTrailToPane(trailId, 'selectedTrailsPane');
+        
         const layerGroup = this.trailLayers.get(trailId);
         if (layerGroup) {
             if (layerGroup.allPolylines) {
@@ -754,7 +806,7 @@ class TrailsApp {
                         weight: 6, 
                         opacity: 1 
                     });
-                    // Don't call bringToFront() - keeps hit polylines on top
+                    // Don't call bringToFront() - panes handle z-order
                 });
             } else {
                 layerGroup.setStyle({ 
@@ -762,7 +814,7 @@ class TrailsApp {
                     weight: 6, 
                     opacity: 1 
                 });
-                // Don't call bringToFront() - keeps hit polylines on top
+                // Don't call bringToFront() - panes handle z-order
             }
         }
         const listItem = document.querySelector(`[data-trail-id="${trailId}"]`);
@@ -778,10 +830,16 @@ class TrailsApp {
 
     deselectTrail(trailId) {
         this.highlightedTrailIds.delete(trailId);
+        
         const layerGroup = this.trailLayers.get(trailId);
         if (layerGroup) {
             const isSaved = this.savedTrailIds.has(trailId);
             const color = isSaved ? '#2c7a3f' : '#e74c3c';
+            
+            // Move trail to appropriate pane based on saved status
+            const pane = isSaved ? 'savedTrailsPane' : 'searchedTrailsPane';
+            this.moveTrailToPane(trailId, pane);
+            
             if (layerGroup.allPolylines) {
                 layerGroup.allPolylines.forEach(polyline => {
                     polyline.setStyle({ 
@@ -809,6 +867,12 @@ class TrailsApp {
         const trailsCount = document.getElementById('trailsCount');
         
         trailsCount.textContent = this.allTrails.length;
+
+        // Update Save Selection button visibility
+        const saveSelectionBtn = document.getElementById('saveSelectionBtn');
+        if (saveSelectionBtn) {
+            saveSelectionBtn.style.display = this.highlightedTrailIds.size > 0 ? 'inline-flex' : 'none';
+        }
 
         if (this.allTrails.length === 0) {
             trailsContainer.innerHTML = '<div class="empty-state">No trails found. Use the search button to find trails in the current map view.</div>';
@@ -1189,9 +1253,14 @@ class TrailsApp {
         this.savedTrails.push(trail);
         this.saveSavedTrails();
         
-        // Update trail color on map
+        // Update trail color on map and move to saved pane
         const layerGroup = this.trailLayers.get(trailId);
         if (layerGroup) {
+            // Move to saved pane unless it's selected
+            if (!this.highlightedTrailIds.has(trailId)) {
+                this.moveTrailToPane(trailId, 'savedTrailsPane');
+            }
+            
             if (layerGroup.allPolylines) {
                 layerGroup.allPolylines.forEach(polyline => {
                     polyline.setStyle({ color: '#2c7a3f' });
@@ -1203,6 +1272,68 @@ class TrailsApp {
         
         this.updateTrailsUI();
         this.showToast(`Saved: ${trail.name}`);
+    }
+
+    saveSelectedTrails() {
+        if (this.highlightedTrailIds.size === 0) {
+            this.showToast('No trails selected');
+            return;
+        }
+
+        let savedCount = 0;
+        let alreadySavedCount = 0;
+
+        // Save all selected trails
+        this.highlightedTrailIds.forEach(trailId => {
+            const trail = this.trailsById.get(trailId);
+            
+            if (!trail) {
+                return;
+            }
+
+            // Check if already saved
+            if (this.savedTrailIds.has(trail.id)) {
+                alreadySavedCount++;
+                return;
+            }
+
+            this.savedTrails.push(trail);
+            savedCount++;
+            
+            // Update trail color on map and move to saved pane
+            const layerGroup = this.trailLayers.get(trailId);
+            if (layerGroup) {
+                if (layerGroup.allPolylines) {
+                    layerGroup.allPolylines.forEach(polyline => {
+                        polyline.setStyle({ color: '#2c7a3f' });
+                    });
+                } else {
+                    layerGroup.setStyle({ color: '#2c7a3f' });
+                }
+            }
+        });
+
+        // Save to localStorage
+        if (savedCount > 0) {
+            this.saveSavedTrails();
+        }
+
+        // Clear selection after saving
+        const selectedIds = Array.from(this.highlightedTrailIds);
+        selectedIds.forEach(trailId => {
+            this.deselectTrail(trailId);
+        });
+
+        this.updateTrailsUI();
+
+        // Show appropriate toast message
+        if (savedCount > 0 && alreadySavedCount > 0) {
+            this.showToast(`Saved ${savedCount} trail(s). ${alreadySavedCount} already saved.`);
+        } else if (savedCount > 0) {
+            this.showToast(`Saved ${savedCount} trail(s)`);
+        } else {
+            this.showToast('All selected trails were already saved');
+        }
     }
 
     removeTrail(trailId) {
