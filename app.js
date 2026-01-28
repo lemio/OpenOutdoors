@@ -2219,7 +2219,7 @@ class VoronoiOverlay {
                     if (!cell) continue;
                     
                     const trailId = trailIds[i];
-                    const colorIndex = Math.abs(trailId.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0)) % colors.length;
+                    const colorIndex = Math.abs(String(trailId).split('').reduce((sum, char) => sum + char.charCodeAt(0), 0)) % colors.length;
                     const color = colors[colorIndex];
                     
                     // Draw cell
