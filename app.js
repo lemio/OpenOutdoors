@@ -2036,11 +2036,42 @@ class VoronoiOverlay {
         this.voronoi = null;
         this.points = [];
         this.trailIds = [];
+        this.currentHoverTrailId = null;
         
         // Listen to map events to regenerate when needed
         this.map.on('moveend', () => {
             if (this.visible) {
                 this.regenerate();
+            }
+        });
+        
+        // Add mousemove listener for Voronoi-based hover detection
+        this.map.on('mousemove', (e) => {
+            if (this.visible && this.voronoi) {
+                const nearestTrailId = this.findNearestTrail(e.latlng);
+                
+                // Only update if the trail has changed
+                if (nearestTrailId !== this.currentHoverTrailId) {
+                    // Unhighlight previous trail
+                    if (this.currentHoverTrailId) {
+                        this.trailsApp.highlightTrail(this.currentHoverTrailId, false);
+                    }
+                    
+                    // Highlight new trail
+                    if (nearestTrailId) {
+                        this.trailsApp.highlightTrail(nearestTrailId, true);
+                    }
+                    
+                    this.currentHoverTrailId = nearestTrailId;
+                }
+            }
+        });
+        
+        // Clear hover state when mouse leaves map
+        this.map.on('mouseout', () => {
+            if (this.visible && this.currentHoverTrailId) {
+                this.trailsApp.highlightTrail(this.currentHoverTrailId, false);
+                this.currentHoverTrailId = null;
             }
         });
     }
@@ -2062,6 +2093,13 @@ class VoronoiOverlay {
 
     hide() {
         this.visible = false;
+        
+        // Clear any hover state when hiding overlay
+        if (this.currentHoverTrailId) {
+            this.trailsApp.highlightTrail(this.currentHoverTrailId, false);
+            this.currentHoverTrailId = null;
+        }
+        
         if (this.overlayLayer) {
             this.map.removeLayer(this.overlayLayer);
             this.overlayLayer = null;
@@ -2178,7 +2216,7 @@ class VoronoiOverlay {
                 this._canvas.style.top = '0';
                 this._canvas.style.left = '0';
                 this._canvas.style.pointerEvents = 'none';
-                this._canvas.style.opacity = '0.3';
+                this._canvas.style.opacity = '0.6';
                 this._canvas.style.zIndex = '600';
                 
                 // Add canvas to voronoi pane for proper layering
@@ -2186,12 +2224,23 @@ class VoronoiOverlay {
                 
                 // Draw Voronoi
                 this._draw();
+                
+                // Update canvas position on map move (for smoother dragging experience)
+                this._updatePosition();
+                map.on('move', this._updatePosition, this);
             },
             
             onRemove: function(map) {
+                map.off('move', this._updatePosition, this);
                 if (this._canvas) {
                     L.DomUtil.remove(this._canvas);
                 }
+            },
+            
+            _updatePosition: function() {
+                // Update canvas transform to follow map during pan
+                const offset = this._map.containerPointToLayerPoint([0, 0]);
+                L.DomUtil.setPosition(this._canvas, offset);
             },
             
             _draw: function() {
