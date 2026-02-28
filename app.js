@@ -586,20 +586,6 @@ class TrailsApp {
                 this.trailLayers.set(trail.id, polylineGroup);
             }
         });
-
-        // Fit map to show all trails
-        if (this.trailLayers.size > 0) {
-            const allLayers = [];
-            this.trailLayers.forEach(layerGroup => {
-                if (layerGroup.allPolylines) {
-                    allLayers.push(...layerGroup.allPolylines);
-                } else {
-                    allLayers.push(layerGroup);
-                }
-            });
-            const group = L.featureGroup(allLayers);
-            this.map.fitBounds(group.getBounds().pad(0.1));
-        }
     }
 
     clearTrailLayers() {
