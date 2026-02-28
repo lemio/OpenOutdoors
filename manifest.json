@@ -2,7 +2,7 @@
   "name": "OpenOutdoors - Hiking Trails",
   "short_name": "OpenOutdoors",
   "description": "Discover and save hiking trails on OpenStreetMap",
-  "start_url": "/",
+  "start_url": "/OpenOutdoors/",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#2c7a3f",
