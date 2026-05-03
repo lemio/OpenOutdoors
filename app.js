@@ -228,6 +228,8 @@ class TrailsApp {
             this.updateTrailIndexes();
             this.updateTrailsUI();
         }
+        // skipUrl=true is used during initialization (initSportFromUrl) to avoid
+        // overwriting URL parameters (refs, bbox) before loadSharedTrails() reads them.
         if (!skipUrl) this.updateUrl();
     }
 
@@ -1393,6 +1395,7 @@ class TrailsApp {
         );
 
         // Network priority: international (0) > national (1) > regional (2) > local (3) > none (4)
+        const NO_NETWORK_PRIORITY = 4;
         const networkPriority = {
             iwn: 0, icn: 0,
             nwn: 1, ncn: 1,
@@ -1401,7 +1404,7 @@ class TrailsApp {
         };
         const getNetworkPriority = (trail) => {
             const p = networkPriority[trail.tags?.network];
-            return p !== undefined ? p : 4;
+            return p !== undefined ? p : NO_NETWORK_PRIORITY;
         };
 
         // Sort: saved trails first, then by network priority, then alphabetically
@@ -1947,6 +1950,15 @@ class TrailsApp {
         });
     }
 
+    // Returns the type-prefixed ID string for a saved trail (r=relation, n=node, w=way).
+    // Used by updateUrl() and shareTrails() to encode trail types in the URL.
+    getTypePrefixedRef(trail) {
+        const osmType = trail.osmType || (trail.type === 'node' ? 'node' : 'relation');
+        if (osmType === 'node') return `n${trail.id}`;
+        if (osmType === 'way') return `w${trail.id}`;
+        return `r${trail.id}`;
+    }
+
     updateUrl() {
         const bounds = this.map.getBounds();
         const bbox = `${bounds.getSouth()},${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()}`;
@@ -1956,13 +1968,7 @@ class TrailsApp {
             return;
         }
 
-        const trailRefs = this.savedTrails.map(trail => {
-            const osmType = trail.osmType || (trail.type === 'node' ? 'node' : 'relation');
-            if (osmType === 'node') return `n${trail.id}`;
-            if (osmType === 'way') return `w${trail.id}`;
-            return `r${trail.id}`;
-        }).join(',');
-
+        const trailRefs = this.savedTrails.map(t => this.getTypePrefixedRef(t)).join(',');
         const url = `${window.location.pathname}?refs=${trailRefs}&bbox=${bbox}&sport=${this.currentSport}`;
         window.history.replaceState({}, '', url);
     }
@@ -1976,12 +1982,7 @@ class TrailsApp {
         // Build the share URL using the same logic as updateUrl(), but with full origin
         const bounds = this.map.getBounds();
         const bbox = `${bounds.getSouth()},${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()}`;
-        const trailRefs = this.savedTrails.map(trail => {
-            const osmType = trail.osmType || (trail.type === 'node' ? 'node' : 'relation');
-            if (osmType === 'node') return `n${trail.id}`;
-            if (osmType === 'way') return `w${trail.id}`;
-            return `r${trail.id}`;
-        }).join(',');
+        const trailRefs = this.savedTrails.map(t => this.getTypePrefixedRef(t)).join(',');
         const shareUrl = `${window.location.origin}${window.location.pathname}?refs=${trailRefs}&bbox=${bbox}&sport=${this.currentSport}`;
 
         // Check URL length
@@ -2158,8 +2159,8 @@ class TrailsApp {
                 } else if (ref.startsWith('w')) {
                     wayIds.push(ref.substring(1));
                 } else {
-                    // 'r' prefix or legacy (no prefix) → relation
-                    relationIds.push(ref.replace(/^r/, ''));
+                    // 'r' prefix → relation; legacy refs without any prefix → also relation
+                    relationIds.push(ref.startsWith('r') ? ref.substring(1) : ref);
                 }
             });
 
