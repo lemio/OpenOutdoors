@@ -618,6 +618,46 @@ h3 {
     color: white;
 }
 
+/* GPS location dot */
+.gps-dot {
+    width: 16px;
+    height: 16px;
+    background: #4a90d9;
+    border-radius: 50%;
+    border: 3px solid white;
+    box-shadow: 0 0 0 2px rgba(74, 144, 217, 0.4), 0 0 10px rgba(0,0,0,0.4);
+    animation: gps-pulse 2s ease-in-out infinite;
+}
+
+@keyframes gps-pulse {
+    0%, 100% { box-shadow: 0 0 0 2px rgba(74, 144, 217, 0.4), 0 0 10px rgba(0,0,0,0.4); }
+    50% { box-shadow: 0 0 0 6px rgba(74, 144, 217, 0.2), 0 0 10px rgba(0,0,0,0.4); }
+}
+
+/* Active state for location button when GPS tracking is on */
+#locationBtn.active {
+    color: #4a90d9;
+    animation: location-btn-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes location-btn-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+/* Waymarked-trails style network badge */
+.trail-badge {
+    display: inline-block;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: white;
+    line-height: 1.4;
+    vertical-align: middle;
+    letter-spacing: 0.03em;
+}
+
 .popup-btn-save {
     background: #2c7a3f;
 }

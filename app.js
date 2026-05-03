@@ -57,6 +57,17 @@ class TrailsApp {
 
         // Sport mode (walking / biking / camping)
         this.currentSport = 'walking';
+
+        // GPS tracking state
+        this.gpsActive = false;
+        this.gpsWatchId = null;
+        this.gpsTrailPoints = [];
+        this.gpsTrailLayer = null;
+        this.gpsAccuracyCircle = null;
+        this.gpsTimeout = null;
+        this._onVisibilityChange = () => {
+            if (document.hidden) this.stopGpsTracking();
+        };
         
         this.init();
     }
@@ -118,9 +129,9 @@ class TrailsApp {
             this.searchTrails();
         });
 
-        // My Location button
+        // My Location button (toggles continuous GPS tracking)
         document.getElementById('locationBtn').addEventListener('click', () => {
-            this.showMyLocation();
+            this.toggleGpsTracking();
         });
 
         // Nearby trails button (hidden but kept for backward compat)
@@ -399,42 +410,114 @@ class TrailsApp {
         }, 3000);
     }
 
-    showMyLocation() {
+    toggleGpsTracking() {
+        if (this.gpsActive) {
+            this.stopGpsTracking();
+        } else {
+            this.startGpsTracking();
+        }
+    }
+
+    startGpsTracking() {
         if (!navigator.geolocation) {
             this.showToast('Geolocation is not supported by your browser');
             return;
         }
 
-        this.showLoading(true);
-        navigator.geolocation.getCurrentPosition(
-            (position) => {
-                const lat = position.coords.latitude;
-                const lon = position.coords.longitude;
-                this.currentLocation = { lat, lon };
+        this.gpsActive = true;
+        this.gpsTrailPoints = [];
 
-                // Remove old marker
-                if (this.userMarker) {
-                    this.map.removeLayer(this.userMarker);
-                }
+        const locationBtn = document.getElementById('locationBtn');
+        if (locationBtn) locationBtn.classList.add('active');
 
-                // Add new marker
-                this.userMarker = L.marker([lat, lon], {
-                    icon: L.divIcon({
-                        className: 'user-location-marker',
-                        html: '<div style="background-color: #5a9fd4; width: 16px; height: 16px; border-radius: 50%; border: 3px solid white; box-shadow: 0 0 10px rgba(0,0,0,0.5);"></div>',
-                        iconSize: [20, 20]
-                    })
-                }).addTo(this.map);
+        // Auto-stop after 10 minutes
+        this.gpsTimeout = setTimeout(() => this.stopGpsTracking(), 10 * 60 * 1000);
 
-                // Center map on user location
-                this.map.setView([lat, lon], 13);
-                this.showLoading(false);
-            },
+        // Stop when tab/window becomes hidden
+        document.addEventListener('visibilitychange', this._onVisibilityChange);
+
+        this.gpsWatchId = navigator.geolocation.watchPosition(
+            (position) => this.onGpsUpdate(position),
             (error) => {
-                this.showLoading(false);
                 this.showToast('Unable to retrieve your location: ' + error.message);
-            }
+                this.stopGpsTracking();
+            },
+            { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
         );
+    }
+
+    stopGpsTracking() {
+        this.gpsActive = false;
+
+        if (this.gpsWatchId !== null) {
+            navigator.geolocation.clearWatch(this.gpsWatchId);
+            this.gpsWatchId = null;
+        }
+
+        if (this.gpsTimeout !== null) {
+            clearTimeout(this.gpsTimeout);
+            this.gpsTimeout = null;
+        }
+
+        document.removeEventListener('visibilitychange', this._onVisibilityChange);
+
+        const locationBtn = document.getElementById('locationBtn');
+        if (locationBtn) locationBtn.classList.remove('active');
+    }
+
+    onGpsUpdate(position) {
+        const lat = position.coords.latitude;
+        const lon = position.coords.longitude;
+        const accuracy = position.coords.accuracy; // metres
+        this.currentLocation = { lat, lon };
+
+        // ── Accuracy circle ──────────────────────────────────────────────────
+        if (this.gpsAccuracyCircle) {
+            this.gpsAccuracyCircle.setLatLng([lat, lon]);
+            this.gpsAccuracyCircle.setRadius(accuracy);
+        } else {
+            this.gpsAccuracyCircle = L.circle([lat, lon], {
+                radius: accuracy,
+                color: '#4a90d9',
+                fillColor: '#4a90d9',
+                fillOpacity: 0.15,
+                weight: 1,
+                interactive: false
+            }).addTo(this.map);
+        }
+
+        // ── User location dot ─────────────────────────────────────────────────
+        if (this.userMarker) {
+            this.userMarker.setLatLng([lat, lon]);
+        } else {
+            this.userMarker = L.marker([lat, lon], {
+                icon: L.divIcon({
+                    className: 'user-location-marker',
+                    html: '<div class="gps-dot"></div>',
+                    iconSize: [20, 20],
+                    iconAnchor: [10, 10]
+                }),
+                zIndexOffset: 1000
+            }).addTo(this.map);
+
+            // Centre on first fix
+            this.map.setView([lat, lon], 15);
+        }
+
+        // ── Breadcrumb trail ──────────────────────────────────────────────────
+        this.gpsTrailPoints.push([lat, lon]);
+
+        if (this.gpsTrailLayer) {
+            this.gpsTrailLayer.setLatLngs(this.gpsTrailPoints);
+        } else {
+            this.gpsTrailLayer = L.polyline(this.gpsTrailPoints, {
+                color: '#4a90d9',
+                weight: 3,
+                opacity: 0.7,
+                dashArray: '6, 4',
+                interactive: false
+            }).addTo(this.map);
+        }
     }
 
     async searchTrails() {
@@ -703,6 +786,37 @@ class TrailsApp {
             iconAnchor: [16, 32],
             popupAnchor: [0, -34]
         });
+    }
+
+    // ─── Waymarked Trails Badges ──────────────────────────────────────────────
+
+    // Returns a small HTML badge element mimicking waymarked-trails style shields.
+    // Colours follow the waymarked-trails convention: int=red, nat=orange, reg=blue, loc=green
+    createTrailBadgeHtml(trail) {
+        const tags = trail.tags || {};
+
+        // Determine network level
+        const network = tags.network || '';
+        const networkMap = {
+            iwn: { label: 'I', title: 'International', color: '#c0392b' },
+            nwn: { label: 'N', title: 'National',      color: '#e67e22' },
+            rwn: { label: 'R', title: 'Regional',      color: '#2980b9' },
+            lwn: { label: 'L', title: 'Local',         color: '#27ae60' },
+            icn: { label: 'I', title: 'International', color: '#c0392b' },
+            ncn: { label: 'N', title: 'National',      color: '#e67e22' },
+            rcn: { label: 'R', title: 'Regional',      color: '#2980b9' },
+            lcn: { label: 'L', title: 'Local',         color: '#27ae60' }
+        };
+
+        const net = networkMap[network];
+        if (!net) return '';
+
+        // Use the route ref if available, else network initial
+        const ref = tags.ref ? tags.ref.substring(0, 6) : net.label;
+        const isCycling = tags.route === 'bicycle' || tags.route === 'mtb';
+        const title = `${net.title} ${isCycling ? 'cycling' : 'hiking'} route`;
+
+        return `<span class="trail-badge" style="background:${net.color}" title="${title}">${ref}</span>`;
     }
 
     getTrailDescription(tags) {
@@ -1314,6 +1428,13 @@ class TrailsApp {
         expandIcon.style.marginRight = '0.5rem';
         expandIcon.style.cursor = 'pointer';
         trailName.appendChild(expandIcon);
+
+        // Waymarked-trails style badge
+        const parentBadgeHtml = this.createTrailBadgeHtml(parent);
+        if (parentBadgeHtml) {
+            trailName.insertAdjacentHTML('beforeend', parentBadgeHtml);
+            trailName.insertAdjacentHTML('beforeend', ' ');
+        }
         
         const nameText = document.createTextNode(parent.name);
         trailName.appendChild(nameText);
@@ -1456,7 +1577,13 @@ class TrailsApp {
         
         const trailName = document.createElement('div');
         trailName.className = 'trail-name';
-        trailName.textContent = trail.name;
+        // Insert waymarked-trails style badge before the trail name text
+        const badgeHtml = this.createTrailBadgeHtml(trail);
+        if (badgeHtml) {
+            trailName.insertAdjacentHTML('beforeend', badgeHtml);
+            trailName.insertAdjacentHTML('beforeend', ' ');
+        }
+        trailName.appendChild(document.createTextNode(trail.name));
         if (isSaved) {
             const bookmarkIcon = document.createElement('i');
             bookmarkIcon.className = 'fas fa-bookmark';
