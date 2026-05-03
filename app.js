@@ -113,6 +113,9 @@ class TrailsApp {
             attribution: '© <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>'
         }).addTo(this.map);
 
+        // Keep URL in sync whenever the map view changes
+        this.map.on('moveend', () => this.updateUrl());
+
         // Create custom panes for proper trail rendering order
         // Z-index order: searched (400) < saved (410) < selected (420) < hit (450)
         this.map.createPane('searchedTrailsPane');
@@ -189,11 +192,11 @@ class TrailsApp {
         const urlParams = new URLSearchParams(window.location.search);
         const sport = urlParams.get('sport');
         if (sport && SPORT_CONFIG[sport]) {
-            this.setSport(sport, false); // false = don't clear trails
+            this.setSport(sport, false, true); // skipUrl=true: don't modify URL during init
         }
     }
 
-    setSport(sport, clearResults = true) {
+    setSport(sport, clearResults = true, skipUrl = false) {
         if (!SPORT_CONFIG[sport]) return;
         this.currentSport = sport;
 
@@ -225,6 +228,9 @@ class TrailsApp {
             this.updateTrailIndexes();
             this.updateTrailsUI();
         }
+        // skipUrl=true is used during initialization (initSportFromUrl) to avoid
+        // overwriting URL parameters (refs, bbox) before loadSharedTrails() reads them.
+        if (!skipUrl) this.updateUrl();
     }
 
     updateResultsHeader() {
@@ -904,7 +910,15 @@ class TrailsApp {
                 }
 
                 marker.bindPopup(popupDiv);
-                marker.on('click', () => this.toggleTrailHighlight(trail.id));
+                // On click: toggle selection without calling focusTrail/setView so the
+                // popup opened by bindPopup is not disrupted (fixes single-tap on touchscreens).
+                marker.on('click', () => {
+                    if (this.highlightedTrailIds.has(trail.id)) {
+                        this.deselectTrail(trail.id);
+                    } else {
+                        this.selectTrail(trail.id, false); // select without focus/setView
+                    }
+                });
                 marker.on('mouseover', () => this.highlightTrail(trail.id, true));
                 marker.on('mouseout', () => this.highlightTrail(trail.id, false));
 
@@ -1380,20 +1394,36 @@ class TrailsApp {
             !childTrails.has(t.id) && (!t.childRelations || t.childRelations.length === 0)
         );
 
-        // Sort: saved trails first, then alphabetically by name
+        // Network priority: international (0) > national (1) > regional (2) > local (3) > none (4)
+        const NO_NETWORK_PRIORITY = 4;
+        const networkPriority = {
+            iwn: 0, icn: 0,
+            nwn: 1, ncn: 1,
+            rwn: 2, rcn: 2,
+            lwn: 3, lcn: 3
+        };
+        const getNetworkPriority = (trail) => {
+            const p = networkPriority[trail.tags?.network];
+            return p !== undefined ? p : NO_NETWORK_PRIORITY;
+        };
+
+        // Sort: saved trails first, then by network priority, then alphabetically
         // Use cached savedTrailIds for O(1) checks
         const sortTrails = (trails) => trails.sort((a, b) => {
             const aIsSaved = this.savedTrailIds.has(a.id);
             const bIsSaved = this.savedTrailIds.has(b.id);
             if (aIsSaved && !bIsSaved) return -1;
             if (!aIsSaved && bIsSaved) return 1;
+            const aPriority = getNetworkPriority(a);
+            const bPriority = getNetworkPriority(b);
+            if (aPriority !== bPriority) return aPriority - bPriority;
             return a.name.localeCompare(b.name);
         });
 
         const sortedParents = sortTrails([...parentTrails]);
         const sortedStandalone = sortTrails([...standaloneTrails]);
 
-        // Display parent routes with their children
+        // Display parent route groups first (before individual tracks)
         sortedParents.forEach(parent => {
             this.createParentTrailElement(parent, trailsContainer);
         });
@@ -1783,6 +1813,7 @@ class TrailsApp {
         
         this.updateTrailsUI();
         this.showToast(`Saved: ${trail.name}`);
+        this.updateUrl();
     }
 
     saveSelectedTrails() {
@@ -1836,6 +1867,7 @@ class TrailsApp {
         } else {
             this.showToast('All selected trails were already saved');
         }
+        if (savedCount > 0) this.updateUrl();
     }
 
     removeTrail(trailId) {
@@ -1855,6 +1887,7 @@ class TrailsApp {
         
         this.updateTrailsUI();
         this.showToast('Trail removed');
+        this.updateUrl();
     }
 
     clearSavedTrails() {
@@ -1881,6 +1914,7 @@ class TrailsApp {
             this.saveSavedTrails();
             this.updateTrailsUI();
             this.showToast('All trails cleared');
+            this.updateUrl();
         }
     }
 
@@ -1916,20 +1950,39 @@ class TrailsApp {
         });
     }
 
+    // Returns the type-prefixed ID string for a saved trail (r=relation, n=node, w=way).
+    // Used by updateUrl() and shareTrails() to encode trail types in the URL.
+    getTypePrefixedRef(trail) {
+        const osmType = trail.osmType || (trail.type === 'node' ? 'node' : 'relation');
+        if (osmType === 'node') return `n${trail.id}`;
+        if (osmType === 'way') return `w${trail.id}`;
+        return `r${trail.id}`;
+    }
+
+    updateUrl() {
+        const bounds = this.map.getBounds();
+        const bbox = `${bounds.getSouth()},${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()}`;
+
+        if (this.savedTrails.length === 0) {
+            window.history.replaceState({}, '', `${window.location.pathname}?sport=${this.currentSport}&bbox=${bbox}`);
+            return;
+        }
+
+        const trailRefs = this.savedTrails.map(t => this.getTypePrefixedRef(t)).join(',');
+        const url = `${window.location.pathname}?refs=${trailRefs}&bbox=${bbox}&sport=${this.currentSport}`;
+        window.history.replaceState({}, '', url);
+    }
+
     shareTrails() {
         if (this.savedTrails.length === 0) {
             this.showToast('No trails to share. Save some trails first!');
             return;
         }
 
-        // Get current map bounds
+        // Build the share URL using the same logic as updateUrl(), but with full origin
         const bounds = this.map.getBounds();
         const bbox = `${bounds.getSouth()},${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()}`;
-        
-        // Create a compressed representation using OSM refs only
-        const trailRefs = this.savedTrails.map(trail => trail.id).join(',');
-        
-        // Include current sport in share URL
+        const trailRefs = this.savedTrails.map(t => this.getTypePrefixedRef(t)).join(',');
         const shareUrl = `${window.location.origin}${window.location.pathname}?refs=${trailRefs}&bbox=${bbox}&sport=${this.currentSport}`;
 
         // Check URL length
@@ -2010,7 +2063,7 @@ class TrailsApp {
                     }
                 }
                 
-                // Fetch trails from OSM
+                // Fetch trails from OSM (handles both relations and nodes)
                 const trails = await this.fetchTrailsByRefs(refs);
                 
                 if (trails.length > 0) {
@@ -2029,14 +2082,20 @@ class TrailsApp {
                     this.updateTrailsUI();
 
                     this.showToast(`Loaded ${trails.length} shared trails!`);
+
+                    // Rebuild route hierarchy for walking/biking (not camping)
+                    const routeTrails = trails.filter(t => t.type !== 'node');
+                    if (routeTrails.length > 0 && this.currentSport !== 'camping') {
+                        this.organizeTrailHierarchy(routeTrails);
+                    }
                 } else {
                     this.showToast('No trails could be loaded from shared link');
                 }
                 
                 this.showLoading(false);
                 
-                // Clean URL
-                window.history.replaceState({}, document.title, window.location.pathname);
+                // Update URL to reflect loaded state
+                this.updateUrl();
             } catch (error) {
                 console.error('Error loading shared trails:', error);
                 this.showToast('Error loading shared trails');
@@ -2077,8 +2136,8 @@ class TrailsApp {
 
                 this.showToast(`Loaded ${trails.length} shared trails!`);
 
-                // Clean URL
-                window.history.replaceState({}, document.title, window.location.pathname);
+                // Update URL to reflect loaded state
+                this.updateUrl();
             } catch (error) {
                 console.error('Error loading shared trails:', error);
                 this.showToast('Error loading shared trails');
@@ -2088,12 +2147,39 @@ class TrailsApp {
 
     async fetchTrailsByRefs(refs) {
         try {
-            // Build Overpass query to fetch specific relations by ID
-            const relationIds = refs.map(ref => `relation(${ref});`).join('\n                    ');
+            // Parse type-prefixed refs: r<id> = relation, n<id> = node, w<id> = way
+            // Legacy refs without prefix are treated as relations
+            const relationIds = [];
+            const nodeIds = [];
+            const wayIds = [];
+
+            refs.forEach(ref => {
+                if (ref.startsWith('n')) {
+                    nodeIds.push(ref.substring(1));
+                } else if (ref.startsWith('w')) {
+                    wayIds.push(ref.substring(1));
+                } else {
+                    // 'r' prefix → relation; legacy refs without any prefix → also relation
+                    relationIds.push(ref.startsWith('r') ? ref.substring(1) : ref);
+                }
+            });
+
+            // Build Overpass query covering all requested types
+            const queryParts = [];
+            if (relationIds.length > 0) {
+                queryParts.push(relationIds.map(id => `relation(${id});`).join('\n                    '));
+            }
+            if (nodeIds.length > 0) {
+                queryParts.push(nodeIds.map(id => `node(${id});`).join('\n                    '));
+            }
+            if (wayIds.length > 0) {
+                queryParts.push(wayIds.map(id => `way(${id});`).join('\n                    '));
+            }
+
             const overpassQuery = `
                 [out:json][timeout:25];
                 (
-                    ${relationIds}
+                    ${queryParts.join('\n                    ')}
                 );
                 out body;
                 >;
@@ -2148,7 +2234,32 @@ class TrailsApp {
                 }
             });
 
-            // Third pass: process relations
+            // Third pass: process requested nodes as camping POIs
+            const nodeIdSet = new Set(nodeIds.map(id => parseInt(id)));
+            data.elements.forEach(element => {
+                if (element.type === 'node' && nodeIdSet.has(element.id) && element.tags) {
+                    const campingType = this.getCampingPoiType(element.tags);
+                    if (element.lat && element.lon) {
+                        const poi = {
+                            id: element.id,
+                            type: 'node',
+                            osmType: 'node',
+                            lat: element.lat,
+                            lon: element.lon,
+                            name: element.tags.name || CAMPING_POI_TYPES[campingType]?.label || campingType || 'Amenity',
+                            description: this.getCampingDescription(element.tags),
+                            tags: element.tags,
+                            coordinates: [[element.lat, element.lon]],
+                            wayGroups: [],
+                            distance: null,
+                            campingType
+                        };
+                        trails.push(poi);
+                    }
+                }
+            });
+
+            // Fourth pass: process relations
             data.elements.forEach(element => {
                 if (element.type === 'relation') {
                     const trail = {
@@ -2461,6 +2572,7 @@ class TrailsApp {
         
         const childCount = parent.childRelations ? parent.childRelations.length : 0;
         this.showToast(`Saved ${parent.name} with ${childCount} child routes`);
+        this.updateUrl();
     }
 }
 
