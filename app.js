@@ -1,10 +1,44 @@
-// OpenOutdoors - Hiking Trails Progressive Web App
+// OpenOutdoors - Outdoor Activities Progressive Web App
 // Main Application Logic
 
 // Geographic constants
 const EARTH_CIRCUMFERENCE_METERS = 40075000;
 const TILE_SIZE = 256;
 const METERS_PER_DEGREE = 111000; // Approximate meters per degree at equator
+
+// Zoom threshold: below this zoom level only search for international routes
+const INTERNATIONAL_ONLY_ZOOM = 8;
+
+// Sport configuration
+const SPORT_CONFIG = {
+    walking: {
+        icon: 'fa-person-hiking',
+        label: 'Walking',
+        resultsLabel: 'Trails'
+    },
+    biking: {
+        icon: 'fa-person-biking',
+        label: 'Biking',
+        resultsLabel: 'Routes'
+    },
+    camping: {
+        icon: 'fa-campground',
+        label: 'Camping',
+        resultsLabel: 'Amenities'
+    }
+};
+
+// Camping POI type configuration
+const CAMPING_POI_TYPES = {
+    camp_site: { icon: 'fa-tent', label: 'Campsite' },
+    caravan_site: { icon: 'fa-campground', label: 'Caravan site' },
+    cabin: { icon: 'fa-house', label: 'Cabin' },
+    picnic_site: { icon: 'fa-utensils', label: 'Picnic site' },
+    drinking_water: { icon: 'fa-droplet', label: 'Drinking water' },
+    toilets: { icon: 'fa-restroom', label: 'Toilets' },
+    shower: { icon: 'fa-shower', label: 'Shower' },
+    shelter: { icon: 'fa-person-shelter', label: 'Shelter' }
+};
 
 class TrailsApp {
     constructor() {
@@ -20,6 +54,9 @@ class TrailsApp {
         this.trailsById = new Map(); // Quick lookup by ID
         this.savedTrailIds = new Set(); // Quick saved check
         this.parentGroupsByName = new Map(); // Merge parents by name
+
+        // Sport mode (walking / biking / camping)
+        this.currentSport = 'walking';
         
         this.init();
     }
@@ -30,6 +67,9 @@ class TrailsApp {
 
         // Setup event listeners
         this.setupEventListeners();
+
+        // Restore sport from URL (before loading shared trails)
+        this.initSportFromUrl();
 
         // Load saved trails to allTrails and display them
         this.allTrails = [...this.savedTrails];
@@ -83,7 +123,7 @@ class TrailsApp {
             this.showMyLocation();
         });
 
-        // Nearby trails button
+        // Nearby trails button (hidden but kept for backward compat)
         document.getElementById('nearbyBtn').addEventListener('click', () => {
             this.findNearbyTrails();
         });
@@ -110,29 +150,234 @@ class TrailsApp {
                 this.toggleCollapse();
             });
         }
+
+        // Back button (mobile - shown when panel is collapsed)
+        const backBtn = document.getElementById('backBtn');
+        if (backBtn) {
+            backBtn.addEventListener('click', () => {
+                this.toggleCollapse();
+            });
+        }
+
+        // Sport selector buttons
+        document.querySelectorAll('.sport-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                this.setSport(btn.dataset.sport);
+            });
+        });
+    }
+
+    // ─── Sport Mode ───────────────────────────────────────────────────────────
+
+    initSportFromUrl() {
+        const urlParams = new URLSearchParams(window.location.search);
+        const sport = urlParams.get('sport');
+        if (sport && SPORT_CONFIG[sport]) {
+            this.setSport(sport, false); // false = don't clear trails
+        }
+    }
+
+    setSport(sport, clearResults = true) {
+        if (!SPORT_CONFIG[sport]) return;
+        this.currentSport = sport;
+
+        // Update active button
+        document.querySelectorAll('.sport-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.sport === sport);
+        });
+
+        // Update sport indicator icon
+        const indicator = document.getElementById('sportIndicator');
+        if (indicator) {
+            indicator.innerHTML = `<i class="fas ${SPORT_CONFIG[sport].icon}"></i>`;
+        }
+
+        // Update results header label
+        this.updateResultsHeader();
+
+        // Clear search results (not saved trails) when switching sport
+        if (clearResults) {
+            const newTrails = this.allTrails.filter(t => !this.savedTrailIds.has(t.id));
+            newTrails.forEach(t => {
+                const layer = this.trailLayers.get(t.id);
+                if (layer) {
+                    this.map.removeLayer(layer);
+                    this.trailLayers.delete(t.id);
+                }
+            });
+            this.allTrails = [...this.savedTrails];
+            this.updateTrailIndexes();
+            this.updateTrailsUI();
+        }
+    }
+
+    updateResultsHeader() {
+        const header = document.getElementById('resultsHeader');
+        if (header) {
+            const label = SPORT_CONFIG[this.currentSport]?.resultsLabel || 'Results';
+            const count = document.getElementById('trailsCount');
+            const countVal = count ? count.textContent : '0';
+            header.innerHTML = `${label} (<span id="trailsCount">${countVal}</span>)`;
+        }
+    }
+
+    // ─── Overpass Queries ─────────────────────────────────────────────────────
+
+    buildOverpassQuery(bbox) {
+        const { south, west, north, east } = bbox;
+        const zoom = this.map.getZoom();
+        const internationalOnly = zoom < INTERNATIONAL_ONLY_ZOOM;
+        const box = `${south},${west},${north},${east}`;
+
+        if (this.currentSport === 'biking') {
+            if (internationalOnly) {
+                return `
+                    [out:json][timeout:25];
+                    (
+                        relation["route"="bicycle"]["network"="icn"](${box});
+                    );
+                    out body;
+                    >;
+                    out skel qt;
+                `;
+            }
+            return `
+                [out:json][timeout:25];
+                (
+                    relation["route"="bicycle"](${box});
+                    relation["route"="mtb"](${box});
+                    relation["network"="icn"](${box});
+                    relation["network"="ncn"](${box});
+                    relation["network"="rcn"](${box});
+                );
+                out body;
+                >;
+                out skel qt;
+            `;
+        }
+
+        if (this.currentSport === 'camping') {
+            // Camping uses POI nodes/ways, no zoom filtering needed
+            return `
+                [out:json][timeout:25];
+                (
+                    node["tourism"="camp_site"](${box});
+                    node["tourism"="caravan_site"](${box});
+                    node["tourism"="cabin"](${box});
+                    node["tourism"="picnic_site"](${box});
+                    node["amenity"="drinking_water"](${box});
+                    node["amenity"="toilets"]["access"!="private"](${box});
+                    node["amenity"="shower"](${box});
+                    node["amenity"="shelter"](${box});
+                    way["tourism"="camp_site"](${box});
+                    way["tourism"="caravan_site"](${box});
+                );
+                out body center;
+                >;
+                out skel qt;
+            `;
+        }
+
+        // Walking (default)
+        if (internationalOnly) {
+            return `
+                [out:json][timeout:25];
+                (
+                    relation["network"="iwn"](${box});
+                );
+                out body;
+                >;
+                out skel qt;
+            `;
+        }
+        return `
+            [out:json][timeout:25];
+            (
+                relation["route"="hiking"](${box});
+                relation["route"="foot"](${box});
+                relation["network"="rwn"](${box});
+                relation["network"="nwn"](${box});
+                relation["network"="iwn"](${box});
+            );
+            out body;
+            >;
+            out skel qt;
+        `;
+    }
+
+    buildNearbyOverpassQuery(lat, lon, radiusMeters) {
+        const around = `around:${radiusMeters},${lat},${lon}`;
+
+        if (this.currentSport === 'biking') {
+            return `
+                [out:json][timeout:25];
+                (
+                    relation["route"="bicycle"](${around});
+                    relation["route"="mtb"](${around});
+                    relation["network"="icn"](${around});
+                    relation["network"="ncn"](${around});
+                    relation["network"="rcn"](${around});
+                );
+                out body;
+                >;
+                out skel qt;
+            `;
+        }
+
+        if (this.currentSport === 'camping') {
+            return `
+                [out:json][timeout:25];
+                (
+                    node["tourism"="camp_site"](${around});
+                    node["tourism"="caravan_site"](${around});
+                    node["tourism"="cabin"](${around});
+                    node["tourism"="picnic_site"](${around});
+                    node["amenity"="drinking_water"](${around});
+                    node["amenity"="toilets"]["access"!="private"](${around});
+                    node["amenity"="shower"](${around});
+                    node["amenity"="shelter"](${around});
+                );
+                out body;
+            `;
+        }
+
+        // Walking (default)
+        return `
+            [out:json][timeout:25];
+            (
+                relation["route"="hiking"](${around});
+                relation["route"="foot"](${around});
+                relation["network"="rwn"](${around});
+                relation["network"="nwn"](${around});
+                relation["network"="iwn"](${around});
+            );
+            out body;
+            >;
+            out skel qt;
+        `;
     }
 
     toggleCollapse() {
         const controlPanel = document.querySelector('.control-panel');
         const collapseBtn = document.getElementById('collapseBtn');
+        const backBtn = document.getElementById('backBtn');
         
-        if (!controlPanel || !collapseBtn) {
-            return;
-        }
-        
-        const icon = collapseBtn.querySelector('i');
-        if (!icon) {
-            return;
-        }
+        if (!controlPanel) return;
         
         controlPanel.classList.toggle('collapsed');
-        
-        if (controlPanel.classList.contains('collapsed')) {
-            icon.className = 'fas fa-chevron-down';
-            collapseBtn.title = 'Expand trail list';
-        } else {
-            icon.className = 'fas fa-chevron-up';
-            collapseBtn.title = 'Collapse trail list';
+        const isCollapsed = controlPanel.classList.contains('collapsed');
+
+        // Show back button on map when panel is collapsed (mobile only)
+        if (backBtn) {
+            backBtn.style.display = isCollapsed ? 'flex' : 'none';
+        }
+
+        if (collapseBtn) {
+            const icon = collapseBtn.querySelector('i');
+            if (icon) {
+                icon.className = isCollapsed ? 'fas fa-chevron-down' : 'fas fa-chevron-up';
+            }
+            collapseBtn.title = isCollapsed ? 'Expand panel' : 'Collapse panel';
         }
     }
 
@@ -198,25 +443,14 @@ class TrailsApp {
         try {
             // Get map bounds for search
             const bounds = this.map.getBounds();
-            const south = bounds.getSouth();
-            const west = bounds.getWest();
-            const north = bounds.getNorth();
-            const east = bounds.getEast();
+            const bbox = {
+                south: bounds.getSouth(),
+                west: bounds.getWest(),
+                north: bounds.getNorth(),
+                east: bounds.getEast()
+            };
 
-            // Build Overpass query focusing on hiking networks/relations
-            const overpassQuery = `
-                [out:json][timeout:25];
-                (
-                    relation["route"="hiking"](${south},${west},${north},${east});
-                    relation["route"="foot"](${south},${west},${north},${east});
-                    relation["network"="rwn"](${south},${west},${north},${east});
-                    relation["network"="nwn"](${south},${west},${north},${east});
-                    relation["network"="iwn"](${south},${west},${north},${east});
-                );
-                out body;
-                >;
-                out skel qt;
-            `;
+            const overpassQuery = this.buildOverpassQuery(bbox);
 
             // Add timeout to fetch request
             const controller = new AbortController();
@@ -241,7 +475,7 @@ class TrailsApp {
             if (error.name === 'AbortError') {
                 this.showToast('Search timed out. Please try a smaller area.');
             } else {
-                this.showToast('Error searching trails. Please try again.');
+                this.showToast('Error searching. Please try again.');
             }
         } finally {
             this.showLoading(false);
@@ -261,20 +495,7 @@ class TrailsApp {
             const radiusMeters = radius * 1000;
             const { lat, lon } = this.currentLocation;
 
-            // Build Overpass query for nearby hiking networks/relations
-            const overpassQuery = `
-                [out:json][timeout:25];
-                (
-                    relation["route"="hiking"](around:${radiusMeters},${lat},${lon});
-                    relation["route"="foot"](around:${radiusMeters},${lat},${lon});
-                    relation["network"="rwn"](around:${radiusMeters},${lat},${lon});
-                    relation["network"="nwn"](around:${radiusMeters},${lat},${lon});
-                    relation["network"="iwn"](around:${radiusMeters},${lat},${lon});
-                );
-                out body;
-                >;
-                out skel qt;
-            `;
+            const overpassQuery = this.buildNearbyOverpassQuery(lat, lon, radiusMeters);
 
             // Add timeout to fetch request
             const controller = new AbortController();
@@ -299,7 +520,7 @@ class TrailsApp {
             if (error.name === 'AbortError') {
                 this.showToast('Search timed out. Please try a smaller radius.');
             } else {
-                this.showToast('Error finding nearby trails. Please try again.');
+                this.showToast('Error finding nearby results. Please try again.');
             }
         } finally {
             this.showLoading(false);
@@ -340,40 +561,84 @@ class TrailsApp {
             }
         });
 
-        // Third pass: process relations
-        data.elements.forEach(element => {
-            if (element.type === 'relation') {
-                const trail = {
-                    id: element.id,
-                    type: 'relation',
-                    osmType: 'relation',
-                    name: element.tags?.name || element.tags?.ref || `Trail ${element.id}`,
-                    description: this.getTrailDescription(element.tags),
-                    tags: element.tags || {},
-                    members: element.members || [],
-                    coordinates: [],
-                    wayGroups: [], // Array of coordinate arrays, one per way
-                    distance: element.tags?.distance || null,
-                    isSuperRoute: element.tags?.type === 'superroute',
-                    isNetwork: element.tags?.type === 'network'
-                };
+        if (this.currentSport === 'camping') {
+            // Camping mode: process nodes and ways as POI markers
+            data.elements.forEach(element => {
+                if ((element.type === 'node' || element.type === 'way') && element.tags) {
+                    const campingType = this.getCampingPoiType(element.tags);
+                    if (!campingType) return;
 
-                // Collect coordinates from member ways - keep them separated by way
-                if (element.members) {
-                    element.members.forEach(member => {
-                        if (member.type === 'way' && ways[member.ref]) {
-                            const wayCoords = ways[member.ref].coordinates;
-                            trail.wayGroups.push(wayCoords);
-                            trail.coordinates.push(...wayCoords); // Keep flat list for bounds calculation
+                    // For ways, use the center point (provided by "out body center")
+                    let lat = element.lat;
+                    let lon = element.lon;
+                    if (element.type === 'way') {
+                        if (element.center) {
+                            lat = element.center.lat;
+                            lon = element.center.lon;
+                        } else if (ways[element.id] && ways[element.id].coordinates.length > 0) {
+                            // Compute centroid from coords
+                            const coords = ways[element.id].coordinates;
+                            lat = coords.reduce((s, c) => s + c[0], 0) / coords.length;
+                            lon = coords.reduce((s, c) => s + c[1], 0) / coords.length;
+                        } else {
+                            return; // Can't determine position
                         }
-                    });
-                }
+                    }
+                    if (!lat || !lon) return;
 
-                if (trail.coordinates.length > 0) {
-                    relations.push(trail);
+                    const poi = {
+                        id: element.id,
+                        type: 'node',
+                        osmType: element.type,
+                        lat,
+                        lon,
+                        name: element.tags.name || CAMPING_POI_TYPES[campingType]?.label || campingType,
+                        description: this.getCampingDescription(element.tags),
+                        tags: element.tags,
+                        coordinates: [[lat, lon]],
+                        wayGroups: [],
+                        distance: null,
+                        campingType
+                    };
+                    relations.push(poi);
                 }
-            }
-        });
+            });
+        } else {
+            // Walking / Biking: process relations (routes)
+            data.elements.forEach(element => {
+                if (element.type === 'relation') {
+                    const trail = {
+                        id: element.id,
+                        type: 'relation',
+                        osmType: 'relation',
+                        name: element.tags?.name || element.tags?.ref || `Trail ${element.id}`,
+                        description: this.getTrailDescription(element.tags),
+                        tags: element.tags || {},
+                        members: element.members || [],
+                        coordinates: [],
+                        wayGroups: [], // Array of coordinate arrays, one per way
+                        distance: element.tags?.distance || null,
+                        isSuperRoute: element.tags?.type === 'superroute',
+                        isNetwork: element.tags?.type === 'network'
+                    };
+
+                    // Collect coordinates from member ways - keep them separated by way
+                    if (element.members) {
+                        element.members.forEach(member => {
+                            if (member.type === 'way' && ways[member.ref]) {
+                                const wayCoords = ways[member.ref].coordinates;
+                                trail.wayGroups.push(wayCoords);
+                                trail.coordinates.push(...wayCoords); // Keep flat list for bounds calculation
+                            }
+                        });
+                    }
+
+                    if (trail.coordinates.length > 0) {
+                        relations.push(trail);
+                    }
+                }
+            });
+        }
 
         // Update allTrails with new search results, preserving saved trails
         const newTrails = relations.filter(trail => 
@@ -390,27 +655,82 @@ class TrailsApp {
         this.displayTrailsOnMap(this.allTrails);
         this.updateTrailsUI();
 
+        const label = SPORT_CONFIG[this.currentSport]?.resultsLabel || 'results';
         if (newTrails.length === 0 && this.savedTrails.length === 0) {
-            this.showToast('No trails found. Try adjusting the search area or radius.');
+            this.showToast(`No ${label.toLowerCase()} found. Try adjusting the search area.`);
         } else {
-            this.showToast(`Found ${newTrails.length} new trails!`);
+            this.showToast(`Found ${newTrails.length} new ${label.toLowerCase()}!`);
         }
         
-        // Automatically fetch and organize parent relations for new trails
-        if (newTrails.length > 0) {
+        // Automatically fetch and organize parent relations for new trails (not for camping)
+        if (newTrails.length > 0 && this.currentSport !== 'camping') {
             this.organizeTrailHierarchy(newTrails);
         }
     }
 
+    // ─── Camping Helpers ──────────────────────────────────────────────────────
+
+    getCampingPoiType(tags) {
+        if (tags.tourism === 'camp_site') return 'camp_site';
+        if (tags.tourism === 'caravan_site') return 'caravan_site';
+        if (tags.tourism === 'cabin') return 'cabin';
+        if (tags.tourism === 'picnic_site') return 'picnic_site';
+        if (tags.amenity === 'drinking_water') return 'drinking_water';
+        if (tags.amenity === 'toilets') return 'toilets';
+        if (tags.amenity === 'shower') return 'shower';
+        if (tags.amenity === 'shelter') return 'shelter';
+        return null;
+    }
+
+    getCampingDescription(tags) {
+        const poiType = this.getCampingPoiType(tags);
+        const typeName = CAMPING_POI_TYPES[poiType]?.label || 'Amenity';
+        const parts = [typeName];
+        if (tags.fee && tags.fee !== 'no') parts.push(`Fee: ${tags.fee}`);
+        if (tags.opening_hours) parts.push(tags.opening_hours);
+        if (tags.capacity) parts.push(`Capacity: ${tags.capacity}`);
+        return parts.join(' • ');
+    }
+
+    createCampingIcon(campingType, isSaved, isHighlighted = false) {
+        const cfg = CAMPING_POI_TYPES[campingType] || { icon: 'fa-location-dot', label: 'Amenity' };
+        const color = isHighlighted ? '#2196F3' : (isSaved ? '#2c7a3f' : '#c0392b');
+        const bgColor = isHighlighted ? '#bbdefb' : (isSaved ? '#e8f5e9' : '#fff');
+        return L.divIcon({
+            className: '',
+            html: `<div class="camping-marker-icon" style="background:${bgColor};border-color:${color};color:${color}"><i class="fas ${cfg.icon}"></i></div>`,
+            iconSize: [32, 32],
+            iconAnchor: [16, 32],
+            popupAnchor: [0, -34]
+        });
+    }
+
     getTrailDescription(tags) {
         const parts = [];
+        
+        // Biking network labels
+        if (tags?.route === 'bicycle' || tags?.route === 'mtb') {
+            const networkNames = {
+                'icn': 'International',
+                'ncn': 'National',
+                'rcn': 'Regional',
+                'lcn': 'Local'
+            };
+            if (tags?.network) parts.push(networkNames[tags.network] || tags.network);
+            if (tags?.surface) parts.push(`Surface: ${tags.surface}`);
+            return parts.length > 0 ? parts.join(' • ') : 'Cycling route';
+        }
         
         if (tags?.network) {
             const networkNames = {
                 'iwn': 'International',
                 'nwn': 'National',
                 'rwn': 'Regional',
-                'lwn': 'Local'
+                'lwn': 'Local',
+                'icn': 'International',
+                'ncn': 'National',
+                'rcn': 'Regional',
+                'lcn': 'Local'
             };
             parts.push(networkNames[tags.network] || tags.network);
         }
@@ -430,13 +750,55 @@ class TrailsApp {
 
     displayTrailsOnMap(trails) {
         trails.forEach(trail => {
-            if (trail.coordinates && trail.coordinates.length > 0) {
-                // Check if already on map
-                if (this.trailLayers.has(trail.id)) {
-                    return;
+            if (!trail.coordinates || trail.coordinates.length === 0) return;
+
+            // Check if already on map
+            if (this.trailLayers.has(trail.id)) return;
+
+            const isSaved = this.savedTrails.some(t => t.id === trail.id);
+
+            // ── Camping POI: single-point marker ────────────────────────────
+            if (trail.type === 'node') {
+                const [lat, lon] = trail.coordinates[0];
+                const markerIcon = this.createCampingIcon(trail.campingType, isSaved);
+                const marker = L.marker([lat, lon], { icon: markerIcon, title: trail.name });
+
+                const popupDiv = document.createElement('div');
+                popupDiv.style.minWidth = '160px';
+                const nameEl = document.createElement('strong');
+                nameEl.textContent = trail.name;
+                popupDiv.appendChild(nameEl);
+                popupDiv.appendChild(document.createElement('br'));
+                const descEl = document.createElement('small');
+                descEl.textContent = trail.description;
+                popupDiv.appendChild(descEl);
+
+                if (!isSaved) {
+                    const btnContainer = document.createElement('div');
+                    btnContainer.style.marginTop = '8px';
+                    const saveBtn = document.createElement('button');
+                    saveBtn.className = 'popup-btn popup-btn-save';
+                    saveBtn.innerHTML = '<i class="fas fa-bookmark"></i> Save';
+                    saveBtn.addEventListener('click', () => this.saveTrail(trail.id));
+                    btnContainer.appendChild(saveBtn);
+                    popupDiv.appendChild(btnContainer);
                 }
 
-                const isSaved = this.savedTrails.some(t => t.id === trail.id);
+                marker.bindPopup(popupDiv);
+                marker.on('click', () => this.toggleTrailHighlight(trail.id));
+                marker.on('mouseover', () => this.highlightTrail(trail.id, true));
+                marker.on('mouseout', () => this.highlightTrail(trail.id, false));
+
+                const markerGroup = L.layerGroup([marker]).addTo(this.map);
+                markerGroup.allPolylines = [];
+                markerGroup.allHitPolylines = [];
+                markerGroup.mainPolyline = null;
+                markerGroup._marker = marker;
+                markerGroup._campingType = trail.campingType;
+
+                this.trailLayers.set(trail.id, markerGroup);
+                return;
+            }
                 const trailPane = this.getTrailPane(trail.id);
                 
                 // Use wayGroups if available to draw separate polylines per way, otherwise use coordinates
@@ -584,7 +946,6 @@ class TrailsApp {
                 }
 
                 this.trailLayers.set(trail.id, polylineGroup);
-            }
         });
     }
 
@@ -609,22 +970,18 @@ class TrailsApp {
     moveTrailToPane(trailId, pane) {
         // Move a trail's visible polylines to a different pane
         const layerGroup = this.trailLayers.get(trailId);
-        if (!layerGroup) {
-            return;
-        }
+        if (!layerGroup) return;
         
-        if (layerGroup.allPolylines) {
+        // Camping markers don't use panes
+        if (layerGroup._marker) return;
+        
+        if (layerGroup.allPolylines && layerGroup.allPolylines.length > 0) {
             layerGroup.allPolylines.forEach(polyline => {
                 // Remove from current pane and add to new pane
                 this.map.removeLayer(polyline);
                 polyline.options.pane = pane;
                 polyline.addTo(this.map);
             });
-        } else {
-            // Handle single polyline case
-            this.map.removeLayer(layerGroup);
-            layerGroup.options.pane = pane;
-            layerGroup.addTo(this.map);
         }
     }
 
@@ -632,6 +989,14 @@ class TrailsApp {
         // Helper method to update trail color on map
         const layerGroup = this.trailLayers.get(trailId);
         if (layerGroup) {
+            // Camping marker
+            if (layerGroup._marker) {
+                const trail = this.trailsById.get(trailId);
+                const campingType = trail?.campingType || layerGroup._campingType;
+                const isSaved = color === '#2c7a3f';
+                layerGroup._marker.setIcon(this.createCampingIcon(campingType, isSaved));
+                return;
+            }
             if (layerGroup.allPolylines) {
                 layerGroup.allPolylines.forEach(polyline => {
                     polyline.setStyle({ color: color });
@@ -648,41 +1013,36 @@ class TrailsApp {
         if (layerGroup) {
             const isSaved = this.savedTrailIds.has(trailId);
             const isSelected = this.highlightedTrailIds.has(trailId);
-            
-            if (highlight) {
-                if (layerGroup.allPolylines) {
+
+            // Camping marker
+            if (layerGroup._marker) {
+                const trail = this.trailsById.get(trailId);
+                const campingType = trail?.campingType || layerGroup._campingType;
+                if (highlight || isSelected) {
+                    layerGroup._marker.setIcon(this.createCampingIcon(campingType, isSaved, highlight || isSelected));
+                } else {
+                    layerGroup._marker.setIcon(this.createCampingIcon(campingType, isSaved, false));
+                }
+            } else if (highlight) {
+                if (layerGroup.allPolylines && layerGroup.allPolylines.length > 0) {
                     layerGroup.allPolylines.forEach(polyline => {
                         polyline.setStyle({ 
                             color: '#2196F3', // Blue for hover
                             weight: 6, 
                             opacity: 1 
                         });
-                        // Don't call bringToFront() - keeps hit polylines on top
                     });
-                } else {
-                    layerGroup.setStyle({ 
-                        color: '#2196F3', // Blue for hover
-                        weight: 6, 
-                        opacity: 1 
-                    });
-                    // Don't call bringToFront() - keeps hit polylines on top
                 }
             } else if (!isSelected) {
                 // Return to original color if not selected
                 const color = isSaved ? '#2c7a3f' : '#e74c3c'; // Green for saved, red for searched
-                if (layerGroup.allPolylines) {
+                if (layerGroup.allPolylines && layerGroup.allPolylines.length > 0) {
                     layerGroup.allPolylines.forEach(polyline => {
                         polyline.setStyle({ 
                             color: color,
                             weight: 4, 
                             opacity: 0.7 
                         });
-                    });
-                } else {
-                    layerGroup.setStyle({ 
-                        color: color,
-                        weight: 4, 
-                        opacity: 0.7 
                     });
                 }
             }
@@ -793,27 +1153,26 @@ class TrailsApp {
     selectTrail(trailId, shouldFocus = true) {
         this.highlightedTrailIds.add(trailId);
         
-        // Move trail to selected pane (top layer)
-        this.moveTrailToPane(trailId, 'selectedTrailsPane');
-        
         const layerGroup = this.trailLayers.get(trailId);
         if (layerGroup) {
-            if (layerGroup.allPolylines) {
-                layerGroup.allPolylines.forEach(polyline => {
-                    polyline.setStyle({ 
-                        color: '#2196F3', // Blue for selected
-                        weight: 6, 
-                        opacity: 1 
-                    });
-                    // Don't call bringToFront() - panes handle z-order
-                });
+            // Camping marker
+            if (layerGroup._marker) {
+                const trail = this.trailsById.get(trailId);
+                const campingType = trail?.campingType || layerGroup._campingType;
+                const isSaved = this.savedTrailIds.has(trailId);
+                layerGroup._marker.setIcon(this.createCampingIcon(campingType, isSaved, true));
             } else {
-                layerGroup.setStyle({ 
-                    color: '#2196F3',
-                    weight: 6, 
-                    opacity: 1 
-                });
-                // Don't call bringToFront() - panes handle z-order
+                // Move trail to selected pane (top layer)
+                this.moveTrailToPane(trailId, 'selectedTrailsPane');
+                if (layerGroup.allPolylines && layerGroup.allPolylines.length > 0) {
+                    layerGroup.allPolylines.forEach(polyline => {
+                        polyline.setStyle({ 
+                            color: '#2196F3', // Blue for selected
+                            weight: 6, 
+                            opacity: 1 
+                        });
+                    });
+                }
             }
         }
         const listItem = document.querySelector(`[data-trail-id="${trailId}"]`);
@@ -834,25 +1193,26 @@ class TrailsApp {
         if (layerGroup) {
             const isSaved = this.savedTrailIds.has(trailId);
             const color = isSaved ? '#2c7a3f' : '#e74c3c';
-            
-            // Move trail to appropriate pane based on saved status
-            const pane = isSaved ? 'savedTrailsPane' : 'searchedTrailsPane';
-            this.moveTrailToPane(trailId, pane);
-            
-            if (layerGroup.allPolylines) {
-                layerGroup.allPolylines.forEach(polyline => {
-                    polyline.setStyle({ 
-                        color: color,
-                        weight: 4, 
-                        opacity: 0.7 
-                    });
-                });
+
+            // Camping marker
+            if (layerGroup._marker) {
+                const trail = this.trailsById.get(trailId);
+                const campingType = trail?.campingType || layerGroup._campingType;
+                layerGroup._marker.setIcon(this.createCampingIcon(campingType, isSaved, false));
             } else {
-                layerGroup.setStyle({ 
-                    color: color,
-                    weight: 4, 
-                    opacity: 0.7 
-                });
+                // Move trail to appropriate pane based on saved status
+                const pane = isSaved ? 'savedTrailsPane' : 'searchedTrailsPane';
+                this.moveTrailToPane(trailId, pane);
+                
+                if (layerGroup.allPolylines && layerGroup.allPolylines.length > 0) {
+                    layerGroup.allPolylines.forEach(polyline => {
+                        polyline.setStyle({ 
+                            color: color,
+                            weight: 4, 
+                            opacity: 0.7 
+                        });
+                    });
+                }
             }
         }
         const listItem = document.querySelector(`[data-trail-id="${trailId}"]`);
@@ -865,7 +1225,10 @@ class TrailsApp {
         const trailsContainer = document.getElementById('trailsList');
         const trailsCount = document.getElementById('trailsCount');
         
-        trailsCount.textContent = this.allTrails.length;
+        if (trailsCount) trailsCount.textContent = this.allTrails.length;
+
+        // Refresh results header with current sport label
+        this.updateResultsHeader();
 
         // Update Save Selection button visibility
         const saveSelectionBtn = document.getElementById('saveSelectionBtn');
@@ -873,8 +1236,9 @@ class TrailsApp {
             saveSelectionBtn.style.display = this.highlightedTrailIds.size > 0 ? 'inline-flex' : 'none';
         }
 
+        const label = SPORT_CONFIG[this.currentSport]?.resultsLabel || 'Results';
         if (this.allTrails.length === 0) {
-            trailsContainer.innerHTML = '<div class="empty-state">No trails found. Use the search button to find trails in the current map view.</div>';
+            trailsContainer.innerHTML = `<div class="empty-state">No ${label.toLowerCase()} found. Use the search button to find ${label.toLowerCase()} in the current map view.</div>`;
             return;
         }
 
@@ -1220,6 +1584,16 @@ class TrailsApp {
         if (!trail) {
             return;
         }
+
+        // Single-point feature (camping POI)
+        if (trail.type === 'node' && trail.lat && trail.lon) {
+            this.map.setView([trail.lat, trail.lon], Math.max(this.map.getZoom(), 15));
+            const layerGroup = this.trailLayers.get(trailId);
+            if (layerGroup && layerGroup._marker) {
+                layerGroup._marker.openPopup();
+            }
+            return;
+        }
         
         // If this is a parent-only route (no coordinates), focus on its children
         if (trail.isParentOnly && trail.childRelations && trail.childRelations.length > 0) {
@@ -1238,7 +1612,7 @@ class TrailsApp {
             return;
         }
         
-        if (trail.coordinates && trail.coordinates.length > 0) {
+        if (trail.coordinates && trail.coordinates.length > 1) {
             const bounds = L.latLngBounds(trail.coordinates);
             this.map.fitBounds(bounds.pad(0.2));
             
@@ -1423,7 +1797,8 @@ class TrailsApp {
         // Create a compressed representation using OSM refs only
         const trailRefs = this.savedTrails.map(trail => trail.id).join(',');
         
-        const shareUrl = `${window.location.origin}${window.location.pathname}?refs=${trailRefs}&bbox=${bbox}`;
+        // Include current sport in share URL
+        const shareUrl = `${window.location.origin}${window.location.pathname}?refs=${trailRefs}&bbox=${bbox}&sport=${this.currentSport}`;
 
         // Check URL length
         if (shareUrl.length > 2000) {

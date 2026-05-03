@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="OpenOutdoors - Search and discover hiking trails on OpenStreetMap">
+    <meta name="description" content="OpenOutdoors - Discover hiking, cycling and camping spots on OpenStreetMap">
     <meta name="theme-color" content="#2c7a3f">
-    <title>OpenOutdoors - Hiking Trails</title>
+    <title>OpenOutdoors</title>
     
     <!-- Leaflet CSS for map display -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" 
@@ -29,29 +29,50 @@
 </head>
 <body>
     <div class="app-container">
+        <!-- Floating back button (visible on mobile when panel is collapsed) -->
+        <button id="backBtn" class="back-btn" title="Open menu" aria-label="Open menu" style="display:none;">
+            <i class="fas fa-bars"></i>
+        </button>
+
         <!-- Control Panel -->
         <div class="control-panel">
+            <!-- Sport Selector -->
+            <div class="sport-selector">
+                <button id="sportWalking" class="sport-btn active" title="Walking / Hiking" aria-label="Walking" data-sport="walking">
+                    <i class="fas fa-person-hiking"></i>
+                    <span class="sport-label">Walking</span>
+                </button>
+                <button id="sportBiking" class="sport-btn" title="Cycling" aria-label="Cycling" data-sport="biking">
+                    <i class="fas fa-person-biking"></i>
+                    <span class="sport-label">Biking</span>
+                </button>
+                <button id="sportCamping" class="sport-btn" title="Camping" aria-label="Camping" data-sport="camping">
+                    <i class="fas fa-campground"></i>
+                    <span class="sport-label">Camping</span>
+                </button>
+            </div>
+
             <!-- Toolbar -->
             <div class="toolbar">
-                <button id="searchBtn" class="icon-btn" title="Search trails in current view" aria-label="Search trails">
+                <button id="searchBtn" class="icon-btn" title="Search in current map view" aria-label="Search">
                     <i class="fas fa-search"></i>
                 </button>
                 <button id="locationBtn" class="icon-btn" title="Show my location" aria-label="My location">
                     <i class="fas fa-location-crosshairs"></i>
                 </button>
-                <button id="nearbyBtn" class="icon-btn" title="Find trails near me" aria-label="Trails near me">
+                <button id="nearbyBtn" class="icon-btn" title="Find trails near me" aria-label="Trails near me" style="display:none;">
                     <i class="fas fa-route"></i>
                 </button>
                 <input type="number" id="searchRadius" value="5" min="1" max="50" step="1" title="Search radius in kilometers">
                 <span class="radius-label">km</span>
             </div>
 
-            <!-- Trails Section -->
+            <!-- Results Section -->
             <div class="trails-section">
                 <div class="trails-header">
-                    <h3>Trails (<span id="trailsCount">0</span>)</h3>
+                    <h3 id="resultsHeader">Results (<span id="trailsCount">0</span>)</h3>
                     <div class="trails-actions">
-                        <button id="collapseBtn" class="icon-btn-small mobile-only" title="Collapse trail list" aria-label="Collapse">
+                        <button id="collapseBtn" class="icon-btn-small mobile-only" title="Collapse panel" aria-label="Collapse">
                             <i class="fas fa-chevron-up"></i>
                         </button>
                         <button id="saveSelectionBtn" class="icon-btn-small" title="Save selected trails" aria-label="Save selection" style="display: none;">
@@ -70,12 +91,17 @@
         </div>
 
         <!-- Map Container -->
-        <div id="map" class="map-container"></div>
+        <div id="map" class="map-container">
+            <!-- Sport indicator (top-right of map) -->
+            <div id="sportIndicator" class="sport-indicator" title="Current sport mode">
+                <i class="fas fa-person-hiking"></i>
+            </div>
+        </div>
 
         <!-- Loading Indicator -->
         <div id="loading" class="loading hidden">
             <div class="spinner"></div>
-            <p>Loading trails...</p>
+            <p>Loading...</p>
         </div>
 
         <!-- Toast Notifications -->
