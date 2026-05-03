@@ -96,8 +96,8 @@
 
 /* Camping marker icons */
 .camping-marker-icon {
-    width: 32px;
-    height: 32px;
+    width: 22px;
+    height: 22px;
     border-radius: 50% 50% 50% 0;
     transform: rotate(-45deg);
     border: 2px solid currentColor;
@@ -109,7 +109,7 @@
 
 .camping-marker-icon i {
     transform: rotate(45deg);
-    font-size: 0.9rem;
+    font-size: 0.65rem;
 }
 
 

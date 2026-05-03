@@ -226,6 +226,8 @@ class TrailsApp {
             });
             this.allTrails = [...this.savedTrails];
             this.updateTrailIndexes();
+            // Ensure all saved trails (from any sport) remain visible on the map
+            this.displayTrailsOnMap(this.allTrails);
             this.updateTrailsUI();
         }
         // skipUrl=true is used during initialization (initSportFromUrl) to avoid
@@ -793,9 +795,9 @@ class TrailsApp {
         return L.divIcon({
             className: '',
             html: `<div class="camping-marker-icon" style="background:${bgColor};border-color:${color};color:${color}"><i class="fas ${cfg.icon}"></i></div>`,
-            iconSize: [32, 32],
-            iconAnchor: [16, 32],
-            popupAnchor: [0, -34]
+            iconSize: [22, 22],
+            iconAnchor: [11, 22],
+            popupAnchor: [0, -24]
         });
     }
 
@@ -1575,6 +1577,10 @@ class TrailsApp {
             if (childrenContainer.style.display === 'none' || childrenContainer.style.display === '') {
                 childrenContainer.style.display = 'block';
                 expandIcon.className = 'fas fa-chevron-down';
+                // Ensure all child routes are displayed on the map when unfolding
+                if (parent.childRelations && parent.childRelations.length > 0) {
+                    this.displayTrailsOnMap(parent.childRelations);
+                }
             } else {
                 childrenContainer.style.display = 'none';
                 expandIcon.className = 'fas fa-chevron-right';
