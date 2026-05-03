@@ -9,6 +9,11 @@ const METERS_PER_DEGREE = 111000; // Approximate meters per degree at equator
 // Zoom threshold: below this zoom level only search for international routes
 const INTERNATIONAL_ONLY_ZOOM = 8;
 
+// GPS tracking constants
+const GPS_AUTO_STOP_MS = 10 * 60 * 1000; // 10 minutes
+const GPS_PRIMARY_COLOR = '#4a90d9';
+const GPS_MAX_BADGE_REF_LENGTH = 6;
+
 // Sport configuration
 const SPORT_CONFIG = {
     walking: {
@@ -431,7 +436,7 @@ class TrailsApp {
         if (locationBtn) locationBtn.classList.add('active');
 
         // Auto-stop after 10 minutes
-        this.gpsTimeout = setTimeout(() => this.stopGpsTracking(), 10 * 60 * 1000);
+        this.gpsTimeout = setTimeout(() => this.stopGpsTracking(), GPS_AUTO_STOP_MS);
 
         // Stop when tab/window becomes hidden
         document.addEventListener('visibilitychange', this._onVisibilityChange);
@@ -478,8 +483,8 @@ class TrailsApp {
         } else {
             this.gpsAccuracyCircle = L.circle([lat, lon], {
                 radius: accuracy,
-                color: '#4a90d9',
-                fillColor: '#4a90d9',
+                color: GPS_PRIMARY_COLOR,
+                fillColor: GPS_PRIMARY_COLOR,
                 fillOpacity: 0.15,
                 weight: 1,
                 interactive: false
@@ -511,7 +516,7 @@ class TrailsApp {
             this.gpsTrailLayer.setLatLngs(this.gpsTrailPoints);
         } else {
             this.gpsTrailLayer = L.polyline(this.gpsTrailPoints, {
-                color: '#4a90d9',
+                color: GPS_PRIMARY_COLOR,
                 weight: 3,
                 opacity: 0.7,
                 dashArray: '6, 4',
@@ -812,7 +817,7 @@ class TrailsApp {
         if (!net) return '';
 
         // Use the route ref if available, else network initial
-        const ref = tags.ref ? tags.ref.substring(0, 6) : net.label;
+        const ref = tags.ref ? tags.ref.substring(0, GPS_MAX_BADGE_REF_LENGTH) : net.label;
         const isCycling = tags.route === 'bicycle' || tags.route === 'mtb';
         const title = `${net.title} ${isCycling ? 'cycling' : 'hiking'} route`;
 
